@@ -1,8 +1,9 @@
 -- 测试增强的require和类定义功能
 
--- 测试kg_require
+-- 测试kg_require和require
 local player_module = kg_require("logic.player")
 local weapon_module = require("logic.weapon")
+local utils_module = kg_require("utils.helper")
 
 -- 测试多种类定义方式
 local BaseEntity = DefineClass("BaseEntity")

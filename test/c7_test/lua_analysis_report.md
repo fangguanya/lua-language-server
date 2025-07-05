@@ -2,16 +2,16 @@
 
 基于lua-language-server的深度代码分析
 
-生成时间: 2025-07-05 18:59:12
+生成时间: 2025-07-05 20:16:53
 
 ## 统计信息
 
 - 分析文件数: 4
-- 总节点数: 14
-- 总关系数: 50
-- 类别名映射: 0 个
+- 总节点数: 34
+- 总关系数: 67
+- 类别名映射: 10 个
 - 变量类型推断: 6 个
-- 类继承关系: 0 个
+- 类继承关系: 6 个
 
 ## 变量类型映射
 
@@ -24,6 +24,32 @@
 - `print` → `function`
 - `table` → `tablelib`
 
+## 模块别名映射
+
+以下模块别名已被正确识别和解析:
+
+- `Item` → `Item`
+- `Weapon` → `Weapon`
+- `WeaponClass` → `Weapon`
+- `GM` → `GameManager`
+- `Enemy` → `Enemy`
+- `BaseEntity` → `BaseEntity`
+- `GameManager` → `GameManager`
+- `GameObject` → `GameObject`
+- `Player` → `Player`
+- `PlayerClass` → `Player`
+
+## 类继承关系
+
+以下类的继承关系已被识别:
+
+- `Item` 继承自 `BaseEntity`
+- `GameManager` 继承自 `BaseEntity`
+- `Weapon` 继承自 `Item`
+- `GameObject` 继承自 `BaseEntity`
+- `Player` 继承自 `[GameObject, BaseEntity]`
+- `Enemy` 继承自 `GameObject`
+
 ## 方法调用图
 
 按类型分组的方法调用统计:
@@ -31,7 +57,7 @@
 ### player1 类型
 
 - `move()` 被调用 1 次
-  - enhanced_test.lua:23 (对象: player1)
+  - enhanced_test.lua:24 (对象: player1)
 
 ### self 类型
 
@@ -52,12 +78,12 @@
 ### enemy1 类型
 
 - `attack()` 被调用 1 次
-  - enhanced_test.lua:24 (对象: enemy1)
+  - enhanced_test.lua:25 (对象: enemy1)
 
 ### PlayerAlias 类型
 
 - `new()` 被调用 1 次
-  - enhanced_test.lua:30 (对象: PlayerAlias)
+  - enhanced_test.lua:31 (对象: PlayerAlias)
 
 ### weapon2 类型
 
@@ -95,7 +121,7 @@
 ### player2 类型
 
 - `jump()` 被调用 1 次
-  - enhanced_test.lua:31 (对象: player2)
+  - enhanced_test.lua:32 (对象: player2)
 
 ### axe 类型
 
@@ -105,31 +131,31 @@
 ### Weapon 类型
 
 - `new()` 被调用 1 次
-  - enhanced_test.lua:19 (对象: Weapon)
+  - enhanced_test.lua:20 (对象: Weapon)
 
 ### Player 类型
 
 - `new()` 被调用 1 次
-  - enhanced_test.lua:17 (对象: Player)
+  - enhanced_test.lua:18 (对象: Player)
 
 ### weapon1 类型
 
 - `Use()` 被调用 1 次
   - game_manager.lua:47 (对象: weapon1)
 - `upgrade()` 被调用 1 次
-  - enhanced_test.lua:25 (对象: weapon1)
+  - enhanced_test.lua:26 (对象: weapon1)
 - `IsBroken()` 被调用 1 次
   - game_manager.lua:46 (对象: weapon1)
 
 ### manager 类型
 
 - `initialize()` 被调用 1 次
-  - enhanced_test.lua:26 (对象: manager)
+  - enhanced_test.lua:27 (对象: manager)
 
 ### GameManager 类型
 
 - `new()` 被调用 1 次
-  - enhanced_test.lua:20 (对象: GameManager)
+  - enhanced_test.lua:21 (对象: GameManager)
 
 ### obj1 类型
 
@@ -153,4 +179,4 @@
 ### Enemy 类型
 
 - `new()` 被调用 1 次
-  - enhanced_test.lua:18 (对象: Enemy)
+  - enhanced_test.lua:19 (对象: Enemy)

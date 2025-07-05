@@ -432,12 +432,7 @@ local function analyzeDefineClass(uri, source)
         return
     end
     
-    -- 添加调试信息
-    local fileName = furi.decode(uri):match("([^/\\]+)%.lua$") or furi.decode(uri)
-    if fileName == "enhanced_test" then
-        print(string.format("🔍 [DEBUG] 发现类定义调用: %s", nodeName))
-        print(string.format("    parent类型: %s", source.parent and source.parent.type or "nil"))
-    end
+
     
     local args = source.args
     if not args or not args[1] or args[1].type ~= 'string' then
@@ -465,10 +460,20 @@ local function analyzeDefineClass(uri, source)
     
     local parent = source.parent
     
-    if parent and (parent.type == 'setlocal' or parent.type == 'setglobal') then
+    -- 处理不同的parent类型
+    local actualParent = parent
+    if parent and parent.type == 'select' then
+        -- 如果parent是select，需要找到它的parent
+        actualParent = parent.parent
+    end
+    
+    if actualParent and (actualParent.type == 'setlocal' or actualParent.type == 'setglobal' or actualParent.type == 'local') then
         local varName = nil
-        if parent.node and parent.node[1] then
-            varName = parent.node[1]
+        if actualParent.type == 'local' then
+            -- 对于local类型，变量名直接在第一个元素中
+            varName = actualParent[1]
+        elseif actualParent.node and actualParent.node[1] then
+            varName = actualParent.node[1]
         end
         
         if not varName then
@@ -497,18 +502,18 @@ local function analyzeDefineClass(uri, source)
         })
         
         -- 添加变量节点
-        local varType = parent.type == 'setglobal' and 'global' or 'variable'
+        local varType = actualParent.type == 'setglobal' and 'global' or 'variable'
         local varId = addNode(varType, varName, {
             uri = uri,
             classType = className,
-            line = guide.rowColOf(parent.start) + 1,
-            position = parent.start
+            line = guide.rowColOf(actualParent.start) + 1,
+            position = actualParent.start
         })
         
         -- 添加定义关系
         addRelation('defines', varId, classId, {
             uri = uri,
-            line = guide.rowColOf(parent.start) + 1
+            line = guide.rowColOf(actualParent.start) + 1
         })
         
         -- 添加继承关系
