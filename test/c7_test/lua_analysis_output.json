@@ -1,0 +1,891 @@
+{
+    "callGraph": {
+        "axe": {
+            "GetInfo": [
+                {
+                    "line": 34,
+                    "objectName": "axe",
+                    "position": 330010,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        },
+        "obj1": {
+            "AddItem": [
+                {
+                    "line": 27,
+                    "objectName": "obj1",
+                    "position": 260004,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "GetInfo": [
+                {
+                    "line": 31,
+                    "objectName": "obj1",
+                    "position": 300010,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "TakeDamage": [
+                {
+                    "line": 53,
+                    "objectName": "obj1",
+                    "position": 520008,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        },
+        "obj2": {
+            "AddItem": [
+                {
+                    "line": 28,
+                    "objectName": "obj2",
+                    "position": 270004,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "GetInfo": [
+                {
+                    "line": 32,
+                    "objectName": "obj2",
+                    "position": 310010,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "TakeDamage": [
+                {
+                    "line": 48,
+                    "objectName": "obj2",
+                    "position": 470008,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        },
+        "player": {
+            "GetInfo": [
+                {
+                    "line": 80,
+                    "objectName": "player",
+                    "position": 790010,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "LevelUp": [
+                {
+                    "line": 71,
+                    "objectName": "player",
+                    "position": 700004,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "new": [
+                {
+                    "line": 19,
+                    "objectName": "player",
+                    "position": 180017,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                },
+                {
+                    "line": 20,
+                    "objectName": "player",
+                    "position": 190017,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        },
+        "self": {
+            "GetInfo": [
+                {
+                    "line": 23,
+                    "objectName": "self",
+                    "position": 220010,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+                }
+            ],
+            "LevelUp": [
+                {
+                    "line": 11,
+                    "objectName": "self",
+                    "position": 100004,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+                }
+            ],
+            "SimulateBattle": [
+                {
+                    "line": 36,
+                    "objectName": "self",
+                    "position": 350004,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "__init": [
+                {
+                    "line": 29,
+                    "objectName": "self",
+                    "position": 280004,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+                }
+            ]
+        },
+        "sword": {
+            "GetInfo": [
+                {
+                    "line": 33,
+                    "objectName": "sword",
+                    "position": 320010,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        },
+        "target": {
+            "TakeDamage": [
+                {
+                    "line": 46,
+                    "objectName": "target",
+                    "position": 450008,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+                }
+            ]
+        },
+        "weapon": {
+            "GetInfo": [
+                {
+                    "line": 82,
+                    "objectName": "weapon",
+                    "position": 810014,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "Repair": [
+                {
+                    "line": 75,
+                    "objectName": "weapon",
+                    "position": 740008,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "Upgrade": [
+                {
+                    "line": 76,
+                    "objectName": "weapon",
+                    "position": 750008,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "new": [
+                {
+                    "line": 23,
+                    "objectName": "weapon",
+                    "position": 220018,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                },
+                {
+                    "line": 24,
+                    "objectName": "weapon",
+                    "position": 230016,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        },
+        "weapon1": {
+            "IsBroken": [
+                {
+                    "line": 46,
+                    "objectName": "weapon1",
+                    "position": 450023,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "Use": [
+                {
+                    "line": 47,
+                    "objectName": "weapon1",
+                    "position": 460024,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        },
+        "weapon2": {
+            "IsBroken": [
+                {
+                    "line": 51,
+                    "objectName": "weapon2",
+                    "position": 500023,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ],
+            "Use": [
+                {
+                    "line": 52,
+                    "objectName": "weapon2",
+                    "position": 510024,
+                    "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+                }
+            ]
+        }
+    },
+    "classAliases": [],
+    "metadata": {
+        "analyzer": "lua-language-server-based",
+        "generatedAt": "2025-07-05 18:00:44",
+        "version": "1.0.0"
+    },
+    "nodes": [
+        {
+            "id": "node_1",
+            "metadata": {
+                "className": "PlayerClass",
+                "line": 6,
+                "methodName": "__init",
+                "position": 50009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "name": "PlayerClass:__init",
+            "type": "method"
+        },
+        {
+            "id": "node_2",
+            "metadata": {
+                "className": "PlayerClass",
+                "line": 15,
+                "methodName": "GetInfo",
+                "position": 140009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "name": "PlayerClass:GetInfo",
+            "type": "method"
+        },
+        {
+            "id": "node_3",
+            "metadata": {
+                "className": "PlayerClass",
+                "line": 20,
+                "methodName": "LevelUp",
+                "position": 190009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "name": "PlayerClass:LevelUp",
+            "type": "method"
+        },
+        {
+            "id": "node_4",
+            "metadata": {
+                "className": "PlayerClass",
+                "line": 27,
+                "methodName": "AddItem",
+                "position": 260009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "name": "PlayerClass:AddItem",
+            "type": "method"
+        },
+        {
+            "id": "node_5",
+            "metadata": {
+                "className": "PlayerClass",
+                "line": 38,
+                "methodName": "GetInventoryCount",
+                "position": 370009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "name": "PlayerClass:GetInventoryCount",
+            "type": "method"
+        },
+        {
+            "id": "node_6",
+            "metadata": {
+                "className": "PlayerClass",
+                "line": 43,
+                "methodName": "Attack",
+                "position": 420009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "name": "PlayerClass:Attack",
+            "type": "method"
+        },
+        {
+            "id": "node_7",
+            "metadata": {
+                "className": "PlayerClass",
+                "line": 52,
+                "methodName": "TakeDamage",
+                "position": 510009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "name": "PlayerClass:TakeDamage",
+            "type": "method"
+        },
+        {
+            "id": "node_8",
+            "metadata": {
+                "className": "TmpResult",
+                "line": 7,
+                "methodName": "__init",
+                "position": 60009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "name": "TmpResult:__init",
+            "type": "method"
+        },
+        {
+            "id": "node_9",
+            "metadata": {
+                "className": "TmpResult",
+                "line": 28,
+                "methodName": "GetInfo",
+                "position": 270009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "name": "TmpResult:GetInfo",
+            "type": "method"
+        },
+        {
+            "id": "node_10",
+            "metadata": {
+                "className": "TmpResult",
+                "line": 35,
+                "methodName": "Use",
+                "position": 340009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "name": "TmpResult:Use",
+            "type": "method"
+        },
+        {
+            "id": "node_11",
+            "metadata": {
+                "className": "TmpResult",
+                "line": 46,
+                "methodName": "Repair",
+                "position": 450009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "name": "TmpResult:Repair",
+            "type": "method"
+        },
+        {
+            "id": "node_12",
+            "metadata": {
+                "className": "TmpResult",
+                "line": 53,
+                "methodName": "IsBroken",
+                "position": 520009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "name": "TmpResult:IsBroken",
+            "type": "method"
+        },
+        {
+            "id": "node_13",
+            "metadata": {
+                "className": "TmpResult",
+                "line": 58,
+                "methodName": "Upgrade",
+                "position": 570009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "name": "TmpResult:Upgrade",
+            "type": "method"
+        },
+        {
+            "id": "node_14",
+            "metadata": {
+                "className": "ActorEntity",
+                "line": 8,
+                "methodName": "GetInfo",
+                "position": 70009,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "name": "ActorEntity:GetInfo",
+            "type": "method"
+        }
+    ],
+    "relations": [
+        {
+            "from": "PlayerClass",
+            "id": "rel_1",
+            "metadata": {
+                "line": 6,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "node_1",
+            "type": "defines_method"
+        },
+        {
+            "from": "PlayerClass",
+            "id": "rel_2",
+            "metadata": {
+                "line": 15,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "node_2",
+            "type": "defines_method"
+        },
+        {
+            "from": "PlayerClass",
+            "id": "rel_3",
+            "metadata": {
+                "line": 20,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "node_3",
+            "type": "defines_method"
+        },
+        {
+            "from": "PlayerClass",
+            "id": "rel_4",
+            "metadata": {
+                "line": 27,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "node_4",
+            "type": "defines_method"
+        },
+        {
+            "from": "PlayerClass",
+            "id": "rel_5",
+            "metadata": {
+                "line": 38,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "node_5",
+            "type": "defines_method"
+        },
+        {
+            "from": "PlayerClass",
+            "id": "rel_6",
+            "metadata": {
+                "line": 43,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "node_6",
+            "type": "defines_method"
+        },
+        {
+            "from": "PlayerClass",
+            "id": "rel_7",
+            "metadata": {
+                "line": 52,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "node_7",
+            "type": "defines_method"
+        },
+        {
+            "from": "target",
+            "id": "rel_8",
+            "metadata": {
+                "line": 46,
+                "methodName": "TakeDamage",
+                "objectName": "target",
+                "objectType": "target",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "target:TakeDamage",
+            "type": "calls"
+        },
+        {
+            "from": "self",
+            "id": "rel_9",
+            "metadata": {
+                "line": 23,
+                "methodName": "GetInfo",
+                "objectName": "self",
+                "objectType": "self",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/player.lua"
+            },
+            "to": "self:GetInfo",
+            "type": "calls"
+        },
+        {
+            "from": "TmpResult",
+            "id": "rel_10",
+            "metadata": {
+                "line": 7,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "node_8",
+            "type": "defines_method"
+        },
+        {
+            "from": "TmpResult",
+            "id": "rel_11",
+            "metadata": {
+                "line": 28,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "node_9",
+            "type": "defines_method"
+        },
+        {
+            "from": "TmpResult",
+            "id": "rel_12",
+            "metadata": {
+                "line": 35,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "node_10",
+            "type": "defines_method"
+        },
+        {
+            "from": "TmpResult",
+            "id": "rel_13",
+            "metadata": {
+                "line": 46,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "node_11",
+            "type": "defines_method"
+        },
+        {
+            "from": "TmpResult",
+            "id": "rel_14",
+            "metadata": {
+                "line": 53,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "node_12",
+            "type": "defines_method"
+        },
+        {
+            "from": "TmpResult",
+            "id": "rel_15",
+            "metadata": {
+                "line": 58,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "node_13",
+            "type": "defines_method"
+        },
+        {
+            "from": "self",
+            "id": "rel_16",
+            "metadata": {
+                "line": 11,
+                "methodName": "LevelUp",
+                "objectName": "self",
+                "objectType": "self",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "self:LevelUp",
+            "type": "calls"
+        },
+        {
+            "from": "self",
+            "id": "rel_17",
+            "metadata": {
+                "line": 29,
+                "methodName": "__init",
+                "objectName": "self",
+                "objectType": "self",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/logic/weapon.lua"
+            },
+            "to": "self:__init",
+            "type": "calls"
+        },
+        {
+            "from": "ActorEntity",
+            "id": "rel_18",
+            "metadata": {
+                "line": 8,
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "node_14",
+            "type": "defines_method"
+        },
+        {
+            "from": "obj1",
+            "id": "rel_19",
+            "metadata": {
+                "line": 27,
+                "methodName": "AddItem",
+                "objectName": "obj1",
+                "objectType": "obj1",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "obj1:AddItem",
+            "type": "calls"
+        },
+        {
+            "from": "obj2",
+            "id": "rel_20",
+            "metadata": {
+                "line": 28,
+                "methodName": "AddItem",
+                "objectName": "obj2",
+                "objectType": "obj2",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "obj2:AddItem",
+            "type": "calls"
+        },
+        {
+            "from": "self",
+            "id": "rel_21",
+            "metadata": {
+                "line": 36,
+                "methodName": "SimulateBattle",
+                "objectName": "self",
+                "objectType": "self",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "self:SimulateBattle",
+            "type": "calls"
+        },
+        {
+            "from": "player",
+            "id": "rel_22",
+            "metadata": {
+                "line": 71,
+                "methodName": "LevelUp",
+                "objectName": "player",
+                "objectType": "player",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "player:LevelUp",
+            "type": "calls"
+        },
+        {
+            "from": "player",
+            "id": "rel_23",
+            "metadata": {
+                "line": 19,
+                "methodName": "new",
+                "objectName": "player",
+                "objectType": "player",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "player:new",
+            "type": "calls"
+        },
+        {
+            "from": "player",
+            "id": "rel_24",
+            "metadata": {
+                "line": 20,
+                "methodName": "new",
+                "objectName": "player",
+                "objectType": "player",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "player:new",
+            "type": "calls"
+        },
+        {
+            "from": "weapon",
+            "id": "rel_25",
+            "metadata": {
+                "line": 23,
+                "methodName": "new",
+                "objectName": "weapon",
+                "objectType": "weapon",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon:new",
+            "type": "calls"
+        },
+        {
+            "from": "weapon",
+            "id": "rel_26",
+            "metadata": {
+                "line": 24,
+                "methodName": "new",
+                "objectName": "weapon",
+                "objectType": "weapon",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon:new",
+            "type": "calls"
+        },
+        {
+            "from": "obj1",
+            "id": "rel_27",
+            "metadata": {
+                "line": 31,
+                "methodName": "GetInfo",
+                "objectName": "obj1",
+                "objectType": "obj1",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "obj1:GetInfo",
+            "type": "calls"
+        },
+        {
+            "from": "obj2",
+            "id": "rel_28",
+            "metadata": {
+                "line": 32,
+                "methodName": "GetInfo",
+                "objectName": "obj2",
+                "objectType": "obj2",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "obj2:GetInfo",
+            "type": "calls"
+        },
+        {
+            "from": "sword",
+            "id": "rel_29",
+            "metadata": {
+                "line": 33,
+                "methodName": "GetInfo",
+                "objectName": "sword",
+                "objectType": "sword",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "sword:GetInfo",
+            "type": "calls"
+        },
+        {
+            "from": "axe",
+            "id": "rel_30",
+            "metadata": {
+                "line": 34,
+                "methodName": "GetInfo",
+                "objectName": "axe",
+                "objectType": "axe",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "axe:GetInfo",
+            "type": "calls"
+        },
+        {
+            "from": "obj2",
+            "id": "rel_31",
+            "metadata": {
+                "line": 48,
+                "methodName": "TakeDamage",
+                "objectName": "obj2",
+                "objectType": "obj2",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "obj2:TakeDamage",
+            "type": "calls"
+        },
+        {
+            "from": "obj1",
+            "id": "rel_32",
+            "metadata": {
+                "line": 53,
+                "methodName": "TakeDamage",
+                "objectName": "obj1",
+                "objectType": "obj1",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "obj1:TakeDamage",
+            "type": "calls"
+        },
+        {
+            "from": "weapon",
+            "id": "rel_33",
+            "metadata": {
+                "line": 75,
+                "methodName": "Repair",
+                "objectName": "weapon",
+                "objectType": "weapon",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon:Repair",
+            "type": "calls"
+        },
+        {
+            "from": "weapon",
+            "id": "rel_34",
+            "metadata": {
+                "line": 76,
+                "methodName": "Upgrade",
+                "objectName": "weapon",
+                "objectType": "weapon",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon:Upgrade",
+            "type": "calls"
+        },
+        {
+            "from": "player",
+            "id": "rel_35",
+            "metadata": {
+                "line": 80,
+                "methodName": "GetInfo",
+                "objectName": "player",
+                "objectType": "player",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "player:GetInfo",
+            "type": "calls"
+        },
+        {
+            "from": "weapon1",
+            "id": "rel_36",
+            "metadata": {
+                "line": 46,
+                "methodName": "IsBroken",
+                "objectName": "weapon1",
+                "objectType": "weapon1",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon1:IsBroken",
+            "type": "calls"
+        },
+        {
+            "from": "weapon1",
+            "id": "rel_37",
+            "metadata": {
+                "line": 47,
+                "methodName": "Use",
+                "objectName": "weapon1",
+                "objectType": "weapon1",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon1:Use",
+            "type": "calls"
+        },
+        {
+            "from": "weapon2",
+            "id": "rel_38",
+            "metadata": {
+                "line": 51,
+                "methodName": "IsBroken",
+                "objectName": "weapon2",
+                "objectType": "weapon2",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon2:IsBroken",
+            "type": "calls"
+        },
+        {
+            "from": "weapon2",
+            "id": "rel_39",
+            "metadata": {
+                "line": 52,
+                "methodName": "Use",
+                "objectName": "weapon2",
+                "objectType": "weapon2",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon2:Use",
+            "type": "calls"
+        },
+        {
+            "from": "weapon",
+            "id": "rel_40",
+            "metadata": {
+                "line": 82,
+                "methodName": "GetInfo",
+                "objectName": "weapon",
+                "objectType": "weapon",
+                "uri": "file:///e%3A/BaiduNetdiskDownload/lua-language-server/test/c7_test/manager/game_manager.lua"
+            },
+            "to": "weapon:GetInfo",
+            "type": "calls"
+        }
+    ],
+    "statistics": {
+        "processingTime": 0.10600000000000001,
+        "totalFiles": 3,
+        "totalNodes": 14,
+        "totalRelations": 40
+    },
+    "typeInferences": []
+}
