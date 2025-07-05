@@ -2,36 +2,38 @@
 
 基于lua-language-server的深度代码分析
 
-生成时间: 2025-07-05 18:00:44
+生成时间: 2025-07-05 18:59:12
 
 ## 统计信息
 
-- 分析文件数: 3
+- 分析文件数: 4
 - 总节点数: 14
-- 总关系数: 40
+- 总关系数: 50
 - 类别名映射: 0 个
+- 变量类型推断: 6 个
+- 类继承关系: 0 个
+
+## 变量类型映射
+
+以下变量的类型已被正确推断:
+
+- `round` → `integer`
+- `math` → `mathlib`
+- `require` → `function`
+- `string` → `stringlib`
+- `print` → `function`
+- `table` → `tablelib`
 
 ## 方法调用图
 
-### obj1
+按类型分组的方法调用统计:
 
-- `TakeDamage()` 被调用 1 次
-  - game_manager.lua:53 (对象: obj1)
-- `GetInfo()` 被调用 1 次
-  - game_manager.lua:31 (对象: obj1)
-- `AddItem()` 被调用 1 次
-  - game_manager.lua:27 (对象: obj1)
+### player1 类型
 
-### obj2
+- `move()` 被调用 1 次
+  - enhanced_test.lua:23 (对象: player1)
 
-- `TakeDamage()` 被调用 1 次
-  - game_manager.lua:48 (对象: obj2)
-- `GetInfo()` 被调用 1 次
-  - game_manager.lua:32 (对象: obj2)
-- `AddItem()` 被调用 1 次
-  - game_manager.lua:28 (对象: obj2)
-
-### self
+### self 类型
 
 - `SimulateBattle()` 被调用 1 次
   - game_manager.lua:36 (对象: self)
@@ -42,24 +44,38 @@
 - `__init()` 被调用 1 次
   - weapon.lua:29 (对象: self)
 
-### sword
+### sword 类型
 
 - `GetInfo()` 被调用 1 次
   - game_manager.lua:33 (对象: sword)
 
-### weapon1
+### enemy1 类型
+
+- `attack()` 被调用 1 次
+  - enhanced_test.lua:24 (对象: enemy1)
+
+### PlayerAlias 类型
+
+- `new()` 被调用 1 次
+  - enhanced_test.lua:30 (对象: PlayerAlias)
+
+### weapon2 类型
 
 - `Use()` 被调用 1 次
-  - game_manager.lua:47 (对象: weapon1)
+  - game_manager.lua:52 (对象: weapon2)
 - `IsBroken()` 被调用 1 次
-  - game_manager.lua:46 (对象: weapon1)
+  - game_manager.lua:51 (对象: weapon2)
 
-### target
+### obj2 类型
 
 - `TakeDamage()` 被调用 1 次
-  - player.lua:46 (对象: target)
+  - game_manager.lua:48 (对象: obj2)
+- `GetInfo()` 被调用 1 次
+  - game_manager.lua:32 (对象: obj2)
+- `AddItem()` 被调用 1 次
+  - game_manager.lua:28 (对象: obj2)
 
-### weapon
+### weapon 类型
 
 - `Upgrade()` 被调用 1 次
   - game_manager.lua:76 (对象: weapon)
@@ -71,12 +87,60 @@
   - game_manager.lua:23 (对象: weapon)
   - game_manager.lua:24 (对象: weapon)
 
-### axe
+### target 类型
+
+- `TakeDamage()` 被调用 1 次
+  - player.lua:46 (对象: target)
+
+### player2 类型
+
+- `jump()` 被调用 1 次
+  - enhanced_test.lua:31 (对象: player2)
+
+### axe 类型
 
 - `GetInfo()` 被调用 1 次
   - game_manager.lua:34 (对象: axe)
 
-### player
+### Weapon 类型
+
+- `new()` 被调用 1 次
+  - enhanced_test.lua:19 (对象: Weapon)
+
+### Player 类型
+
+- `new()` 被调用 1 次
+  - enhanced_test.lua:17 (对象: Player)
+
+### weapon1 类型
+
+- `Use()` 被调用 1 次
+  - game_manager.lua:47 (对象: weapon1)
+- `upgrade()` 被调用 1 次
+  - enhanced_test.lua:25 (对象: weapon1)
+- `IsBroken()` 被调用 1 次
+  - game_manager.lua:46 (对象: weapon1)
+
+### manager 类型
+
+- `initialize()` 被调用 1 次
+  - enhanced_test.lua:26 (对象: manager)
+
+### GameManager 类型
+
+- `new()` 被调用 1 次
+  - enhanced_test.lua:20 (对象: GameManager)
+
+### obj1 类型
+
+- `TakeDamage()` 被调用 1 次
+  - game_manager.lua:53 (对象: obj1)
+- `GetInfo()` 被调用 1 次
+  - game_manager.lua:31 (对象: obj1)
+- `AddItem()` 被调用 1 次
+  - game_manager.lua:27 (对象: obj1)
+
+### player 类型
 
 - `GetInfo()` 被调用 1 次
   - game_manager.lua:80 (对象: player)
@@ -86,9 +150,7 @@
   - game_manager.lua:19 (对象: player)
   - game_manager.lua:20 (对象: player)
 
-### weapon2
+### Enemy 类型
 
-- `Use()` 被调用 1 次
-  - game_manager.lua:52 (对象: weapon2)
-- `IsBroken()` 被调用 1 次
-  - game_manager.lua:51 (对象: weapon2)
+- `new()` 被调用 1 次
+  - enhanced_test.lua:18 (对象: Enemy)

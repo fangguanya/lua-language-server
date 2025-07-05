@@ -28,6 +28,7 @@ local analysisResults = {
     classAliases = {},
     callGraph = {},
     typeInferences = {},
+    inheritanceGraph = {}, -- 新增：继承关系图
     statistics = {
         totalFiles = 0,
         totalNodes = 0,
@@ -39,6 +40,9 @@ local analysisResults = {
 -- 节点和关系计数器
 local nodeCounter = 0
 local relationCounter = 0
+
+-- 变量类型跟踪（全局）
+local variableTypes = {}
 
 -- 生成唯一ID
 local function generateId(prefix)
@@ -95,7 +99,7 @@ local function analyzeRequireStatement(uri, source)
     end
     
     local callNodeName = callNode[1]
-    if not callNodeName or callNodeName ~= 'require' then
+    if not callNodeName or (callNodeName ~= 'require' and callNodeName ~= 'kg_require') then
         return
     end
     
@@ -109,11 +113,7 @@ local function analyzeRequireStatement(uri, source)
         return
     end
     
-    local varName = nil
-    if source.node and source.node[1] then
-        varName = source.node[1]
-    end
-    
+    local varName = source.node and source.node[1]
     if not varName then
         return
     end
@@ -121,12 +121,13 @@ local function analyzeRequireStatement(uri, source)
     -- 推断模块类型
     local moduleType = modulePath:match("([^./]+)$") or modulePath
     
-    -- 注册模块别名
+    -- 注册模块别名和变量类型
     analysisResults.classAliases[varName] = moduleType
+    variableTypes[varName] = moduleType
     
-    print(string.format("识别到require语句: %s = require('%s') -> %s", varName, modulePath, moduleType))
+    print(string.format("✅ 识别require: %s = require('%s') → %s", varName, modulePath, moduleType))
     
-    -- 添加模块节点
+    -- 添加节点和关系...
     local moduleId = addNode('module', moduleType, {
         uri = uri,
         modulePath = modulePath,
@@ -134,7 +135,6 @@ local function analyzeRequireStatement(uri, source)
         position = source.start
     })
     
-    -- 添加变量节点
     local varType = source.type == 'setglobal' and 'global' or 'variable'
     local varId = addNode(varType, varName, {
         uri = uri,
@@ -143,7 +143,6 @@ local function analyzeRequireStatement(uri, source)
         position = source.start
     })
     
-    -- 添加导入关系
     addRelation('imports', varId, moduleId, {
         uri = uri,
         modulePath = modulePath,
@@ -151,7 +150,254 @@ local function analyzeRequireStatement(uri, source)
     })
 end
 
--- 分析DefineClass调用
+-- 分析变量赋值和类型推断
+local function analyzeVariableAssignment(uri, source)
+    if source.type ~= 'setlocal' and source.type ~= 'setglobal' then
+        return
+    end
+    
+    local varName = source.node and source.node[1]
+    if not varName then
+        return
+    end
+    
+    -- 使用vm.getInfer获取真实类型
+    local typeView = vm.getInfer(source):view(uri)
+    if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+        variableTypes[varName] = typeView
+        print(string.format("✅ 类型推断: %s → %s", varName, typeView))
+        
+        -- 如果是构造函数调用，尝试提取类名
+        if source.value and source.value.type == 'call' then
+            local callNode = source.value.node
+            if callNode and callNode.type == 'getmethod' then
+                local method = callNode.method
+                if method and method[1] == 'new' then
+                    local object = callNode.node
+                    if object and object[1] then
+                        local objName = object[1]
+                        local realClassName = variableTypes[objName] or analysisResults.classAliases[objName] or objName
+                        variableTypes[varName] = realClassName
+                        print(string.format("✅ 构造函数推断: %s = %s:new() → %s类型", varName, objName, realClassName))
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- 分析所有变量和类型
+local function analyzeAllVariables(uri, ast)
+    local fileName = furi.decode(uri):match("([^/\\]+)%.lua$") or furi.decode(uri)
+    local isGameManager = (fileName == "game_manager")
+    
+    if isGameManager then
+        print("🔍 [GM] 开始详细分析game_manager文件")
+    end
+    
+    -- 分析setlocal节点
+    guide.eachSourceType(ast, 'setlocal', function(source)
+        local varName = source.node and source.node[1]
+        if not varName then
+            return
+        end
+        
+        if isGameManager then
+            print(string.format("🔍 [GM] 发现setlocal: %s", varName))
+            if source.value then
+                print(string.format("    值类型: %s", source.value.type))
+                if source.value.type == 'call' then
+                    local callNode = source.value.node
+                    if callNode then
+                        print(string.format("    call节点类型: %s", callNode.type))
+                        if callNode.type == 'getglobal' then
+                            print(string.format("    全局函数名: %s", callNode[1] or "nil"))
+                        elseif callNode.type == 'getmethod' then
+                            local obj = callNode.node
+                            local method = callNode.method
+                            if obj and method then
+                                print(string.format("    方法调用: %s:%s", obj[1] or "nil", method[1] or "nil"))
+                            end
+                        end
+                    end
+                else
+                    print("    没有值")
+                end
+            end
+        end
+        
+        -- 检查require语句（支持require和kg_require）
+        if source.value and source.value.type == 'call' then
+            local callNode = source.value.node
+            if callNode and callNode.type == 'getglobal' and (callNode[1] == 'require' or callNode[1] == 'kg_require') then
+                local args = source.value.args
+                if args and args[1] and args[1].type == 'string' then
+                    local modulePath = args[1][1]
+                    if modulePath then
+                        local moduleType = modulePath:match("([^./]+)$") or modulePath
+                        analysisResults.classAliases[varName] = moduleType
+                        variableTypes[varName] = moduleType
+                        print(string.format("✅ require识别: %s = %s('%s') → %s", varName, callNode[1], modulePath, moduleType))
+                    end
+                end
+            elseif callNode and callNode.type == 'getmethod' then
+                -- 构造函数调用
+                local method = callNode.method
+                if method and method[1] == 'new' then
+                    local object = callNode.node
+                    if object and object[1] then
+                        local objName = object[1]
+                        local realClassName = variableTypes[objName] or analysisResults.classAliases[objName] or objName
+                        variableTypes[varName] = realClassName
+                        print(string.format("✅ 构造函数: %s = %s:new() → %s类型", varName, objName, realClassName))
+                    end
+                end
+            end
+        end
+        
+        -- 使用vm.getInfer获取类型
+        if not variableTypes[varName] then
+            local typeView = vm.getInfer(source):view(uri)
+            if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+                variableTypes[varName] = typeView
+                if isGameManager then
+                    print(string.format("✅ [GM] 类型推断: %s → %s", varName, typeView))
+                end
+            end
+        end
+    end)
+    
+    -- 分析setglobal节点
+    guide.eachSourceType(ast, 'setglobal', function(source)
+        local varName = source.node and source.node[1]
+        if not varName then
+            return
+        end
+        
+        -- 类似setlocal的处理逻辑（支持require和kg_require）
+        if source.value and source.value.type == 'call' then
+            local callNode = source.value.node
+            if callNode and callNode.type == 'getglobal' and (callNode[1] == 'require' or callNode[1] == 'kg_require') then
+                local args = source.value.args
+                if args and args[1] and args[1].type == 'string' then
+                    local modulePath = args[1][1]
+                    if modulePath then
+                        local moduleType = modulePath:match("([^./]+)$") or modulePath
+                        analysisResults.classAliases[varName] = moduleType
+                        variableTypes[varName] = moduleType
+                        print(string.format("✅ 全局require: %s = %s('%s') → %s", varName, callNode[1], modulePath, moduleType))
+                    end
+                end
+            end
+        end
+    end)
+    
+    -- 分析local节点（局部变量定义）
+    guide.eachSourceType(ast, 'local', function(source)
+        local varName = source[1]
+        if varName then
+            local typeView = vm.getInfer(source):view(uri)
+            if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+                variableTypes[varName] = typeView
+                if isGameManager then
+                    print(string.format("✅ [GM] 局部变量定义: %s → %s", varName, typeView))
+                end
+            end
+        end
+    end)
+    
+    -- 分析变量引用，获取内置函数和库的类型
+    guide.eachSourceType(ast, 'getglobal', function(source)
+        local varName = source[1]
+        if varName and not variableTypes[varName] then
+            local typeView = vm.getInfer(source):view(uri)
+            if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+                variableTypes[varName] = typeView
+                if not isGameManager then -- 只对非GM文件显示，减少输出
+                    print(string.format("✅ 全局变量: %s → %s", varName, typeView))
+                end
+            end
+        end
+    end)
+    
+    if isGameManager then
+        print("🔍 [GM] game_manager文件分析完成")
+    end
+end
+
+-- 分析构造函数调用和变量类型推断
+local function analyzeConstructorCall(uri, source)
+    if source.type ~= 'setlocal' and source.type ~= 'setglobal' then
+        return
+    end
+    
+    local value = source.value
+    if not value or value.type ~= 'call' then
+        return
+    end
+    
+    local callNode = value.node
+    if not callNode or callNode.type ~= 'getmethod' then
+        return
+    end
+    
+    local object = callNode.node
+    local method = callNode.method
+    
+    if not object or not method then
+        return
+    end
+    
+    -- 检查是否是构造函数调用 (obj:new())
+    local methodName = nil
+    if method.type == 'string' then
+        methodName = method[1]
+    else
+        methodName = method[1]
+    end
+    
+    if methodName == 'new' then
+        -- 获取对象名
+        local objName = nil
+        if object.type == 'getlocal' or object.type == 'getglobal' then
+            objName = object[1]
+        end
+        
+        -- 获取变量名
+        local varName = nil
+        if source.node and source.node[1] then
+            varName = source.node[1]
+        end
+        
+        if objName and varName then
+            -- 推断变量类型
+            local realClassName = analysisResults.classAliases[objName] or variableTypes[objName] or objName
+            
+            -- 记录变量类型
+            variableTypes[varName] = realClassName
+            
+            print(string.format("✅ 识别构造函数: %s = %s:new() → %s类型", varName, objName, realClassName))
+            
+            -- 添加实例节点
+            local instanceId = addNode('instance', varName, {
+                uri = uri,
+                instanceType = realClassName,
+                constructorCall = true,
+                line = guide.rowColOf(source.start) + 1,
+                position = source.start
+            })
+            
+            -- 添加实例化关系
+            addRelation('instantiates', instanceId, realClassName, {
+                uri = uri,
+                constructorObject = objName,
+                line = guide.rowColOf(source.start) + 1
+            })
+        end
+    end
+end
+
+-- 分析类定义调用（支持多种定义方式和继承关系）
 local function analyzeDefineClass(uri, source)
     if source.type ~= 'call' then
         return
@@ -162,10 +408,35 @@ local function analyzeDefineClass(uri, source)
         return
     end
     
-    -- 安全地检查是否是DefineClass或DefineEntity调用
+    -- 支持的类定义函数列表
+    local defineTypes = {
+        "DefineClass", "CreateClass", "DefineEntity",
+        "DefineBriefEntity", "DefineLocalEntity", "DefineComponent", "DefineSingletonClass"
+    }
+    
     local nodeName = node[1]
-    if not nodeName or (nodeName ~= 'DefineClass' and nodeName ~= 'DefineEntity') then
+    if not nodeName then
         return
+    end
+    
+    -- 检查是否是支持的类定义函数
+    local isDefineType = false
+    for _, defineType in ipairs(defineTypes) do
+        if nodeName == defineType then
+            isDefineType = true
+            break
+        end
+    end
+    
+    if not isDefineType then
+        return
+    end
+    
+    -- 添加调试信息
+    local fileName = furi.decode(uri):match("([^/\\]+)%.lua$") or furi.decode(uri)
+    if fileName == "enhanced_test" then
+        print(string.format("🔍 [DEBUG] 发现类定义调用: %s", nodeName))
+        print(string.format("    parent类型: %s", source.parent and source.parent.type or "nil"))
     end
     
     local args = source.args
@@ -176,6 +447,20 @@ local function analyzeDefineClass(uri, source)
     local className = args[1][1]
     if not className then
         return
+    end
+    
+    -- 解析继承关系（第二个及后续参数）
+    local parentClasses = {}
+    for i = 2, #args do
+        local arg = args[i]
+        if arg and arg.type == 'string' and arg[1] then
+            table.insert(parentClasses, arg[1])
+        elseif arg and (arg.type == 'getlocal' or arg.type == 'getglobal') and arg[1] then
+            -- 支持变量引用作为父类
+            local parentVarName = arg[1]
+            local realParentClass = analysisResults.classAliases[parentVarName] or variableTypes[parentVarName] or parentVarName
+            table.insert(parentClasses, realParentClass)
+        end
     end
     
     local parent = source.parent
@@ -193,10 +478,20 @@ local function analyzeDefineClass(uri, source)
         -- 注册类别名
         analysisResults.classAliases[varName] = className
         
+        -- 记录继承关系
+        if #parentClasses > 0 then
+            analysisResults.inheritanceGraph[className] = parentClasses
+            print(string.format("✅ 类继承: %s 继承自 [%s] (定义方式: %s)", 
+                className, table.concat(parentClasses, ", "), nodeName))
+        else
+            print(string.format("✅ 类定义: %s (定义方式: %s)", className, nodeName))
+        end
+        
         -- 添加类节点
         local classId = addNode('class', className, {
             uri = uri,
             defineType = nodeName,
+            parentClasses = parentClasses,
             line = guide.rowColOf(source.start) + 1,
             position = source.start
         })
@@ -215,6 +510,16 @@ local function analyzeDefineClass(uri, source)
             uri = uri,
             line = guide.rowColOf(parent.start) + 1
         })
+        
+        -- 添加继承关系
+        for _, parentClass in ipairs(parentClasses) do
+            addRelation('inherits', classId, parentClass, {
+                uri = uri,
+                childClass = className,
+                parentClass = parentClass,
+                line = guide.rowColOf(source.start) + 1
+            })
+        end
     end
 end
 
@@ -445,10 +750,10 @@ local function analyzeMethodCall(uri, source)
         methodName = 'unknown_method'
     end
     
-    -- 解析对象的真实类型
-    local realClassName = analysisResults.classAliases[objName] or objName
+    -- 解析对象的真实类型（优先使用变量类型跟踪）
+    local realClassName = variableTypes[objName] or analysisResults.classAliases[objName] or objName
     
-    -- 记录调用图
+    -- 记录调用图（使用真实类型作为键）
     if not analysisResults.callGraph[realClassName] then
         analysisResults.callGraph[realClassName] = {}
     end
@@ -459,7 +764,8 @@ local function analyzeMethodCall(uri, source)
         uri = uri,
         line = guide.rowColOf(source.start) + 1,
         position = source.start,
-        objectName = objName
+        objectName = objName,
+        objectType = realClassName
     })
     
     -- 添加调用关系
@@ -470,6 +776,95 @@ local function analyzeMethodCall(uri, source)
         methodName = methodName,
         line = guide.rowColOf(source.start) + 1
     })
+end
+
+-- 最终的变量类型分析方案
+local function analyzeVariableTypesAdvanced(uri, ast)
+    local fileName = furi.decode(uri):match("([^/\\]+)%.lua$") or furi.decode(uri)
+    
+    print(string.format("🔍 深度分析文件: %s", fileName))
+    
+    -- 方法1: 遍历所有源码节点，寻找变量定义
+    guide.eachSource(ast, function(source)
+        -- 处理局部变量定义和赋值
+        if source.type == 'setlocal' then
+            local varName = source.node and source.node[1]
+            if varName then
+                print(string.format("  发现setlocal: %s", varName))
+                
+                -- 检查是否是require调用
+                if source.value and source.value.type == 'call' then
+                    local callNode = source.value.node
+                    if callNode and callNode.type == 'getglobal' and callNode[1] == 'require' then
+                        local args = source.value.args
+                        if args and args[1] and args[1].type == 'string' then
+                            local modulePath = args[1][1]
+                            if modulePath then
+                                local moduleType = modulePath:match("([^./]+)$") or modulePath
+                                variableTypes[varName] = moduleType
+                                analysisResults.classAliases[varName] = moduleType
+                                print(string.format("    ✅ require: %s → %s", varName, moduleType))
+                            end
+                        end
+                    elseif callNode and callNode.type == 'getmethod' then
+                        local method = callNode.method
+                        local object = callNode.node
+                        if method and method[1] == 'new' and object and object[1] then
+                            local objName = object[1]
+                            local objType = variableTypes[objName] or analysisResults.classAliases[objName] or objName
+                            variableTypes[varName] = objType
+                            print(string.format("    ✅ 构造函数: %s = %s:new() → %s", varName, objName, objType))
+                        end
+                    end
+                end
+                
+                -- 使用vm.getInfer获取类型
+                if not variableTypes[varName] then
+                    local typeView = vm.getInfer(source):view(uri)
+                    if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+                        variableTypes[varName] = typeView
+                        print(string.format("    ✅ 类型推断: %s → %s", varName, typeView))
+                    end
+                end
+            end
+        end
+        
+        -- 处理局部变量声明
+        if source.type == 'local' then
+            local varName = source[1]
+            if varName and not variableTypes[varName] then
+                local typeView = vm.getInfer(source):view(uri)
+                if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+                    variableTypes[varName] = typeView
+                    print(string.format("  ✅ 局部变量: %s → %s", varName, typeView))
+                end
+            end
+        end
+        
+        -- 处理全局变量引用
+        if source.type == 'getglobal' then
+            local varName = source[1]
+            if varName and not variableTypes[varName] then
+                local typeView = vm.getInfer(source):view(uri)
+                if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+                    variableTypes[varName] = typeView
+                    print(string.format("  ✅ 全局变量: %s → %s", varName, typeView))
+                end
+            end
+        end
+        
+        -- 处理局部变量引用
+        if source.type == 'getlocal' then
+            local varName = source[1]
+            if varName and not variableTypes[varName] then
+                local typeView = vm.getInfer(source):view(uri)
+                if typeView and typeView ~= 'unknown' and typeView ~= 'any' then
+                    variableTypes[varName] = typeView
+                    print(string.format("  ✅ 局部变量引用: %s → %s", varName, typeView))
+                end
+            end
+        end
+    end)
 end
 
 -- 分析单个文件
@@ -489,15 +884,29 @@ local function analyzeFile(uri)
     
     print(string.format("正在分析文件: %s", fileName))
     
-    -- 遍历AST节点进行分析
+    -- 使用新的高级变量类型分析
+    analyzeVariableTypesAdvanced(uri, ast)
+    
+    -- 遍历AST节点进行其他分析
     guide.eachSource(ast, function(source)
-        analyzeRequireStatement(uri, source)
         analyzeDefineClass(uri, source)
         analyzeAliasAssignment(uri, source)
+        analyzeConstructorCall(uri, source)
         analyzeMethodDefinition(uri, source)
         analyzeFunctionCall(uri, source)
         analyzeMethodCall(uri, source)
     end)
+    
+    -- 显示发现的变量类型
+    local typeCount = 0
+    for varName, varType in pairs(variableTypes) do
+        typeCount = typeCount + 1
+    end
+    if typeCount > 0 then
+        print(string.format("  发现 %d 个变量类型", typeCount))
+    else
+        print("  未发现任何变量类型")
+    end
     
     analysisResults.statistics.totalFiles = analysisResults.statistics.totalFiles + 1
 end
@@ -529,16 +938,52 @@ local function outputMarkdown()
     local aliasCount = 0
     for _ in pairs(analysisResults.classAliases) do aliasCount = aliasCount + 1 end
     table.insert(lines, string.format('- 类别名映射: %d 个', aliasCount))
+    
+    local typeCount = 0
+    for _ in pairs(variableTypes) do typeCount = typeCount + 1 end
+    table.insert(lines, string.format('- 变量类型推断: %d 个', typeCount))
+    
+    local inheritanceCount = 0
+    for _ in pairs(analysisResults.inheritanceGraph) do inheritanceCount = inheritanceCount + 1 end
+    table.insert(lines, string.format('- 类继承关系: %d 个', inheritanceCount))
     table.insert(lines, '')
+    
+    -- 变量类型映射
+    if next(variableTypes) then
+        table.insert(lines, '## 变量类型映射')
+        table.insert(lines, '')
+        table.insert(lines, '以下变量的类型已被正确推断:')
+        table.insert(lines, '')
+        for varName, varType in pairs(variableTypes) do
+            table.insert(lines, string.format('- `%s` → `%s`', varName, varType))
+        end
+        table.insert(lines, '')
+    end
     
     -- 类别名映射
     if next(analysisResults.classAliases) then
-        table.insert(lines, '## 类别名映射')
+        table.insert(lines, '## 模块别名映射')
         table.insert(lines, '')
-        table.insert(lines, '以下别名已被正确识别和解析:')
+        table.insert(lines, '以下模块别名已被正确识别和解析:')
         table.insert(lines, '')
         for alias, realClass in pairs(analysisResults.classAliases) do
             table.insert(lines, string.format('- `%s` → `%s`', alias, realClass))
+        end
+        table.insert(lines, '')
+    end
+    
+    -- 类继承关系
+    if next(analysisResults.inheritanceGraph) then
+        table.insert(lines, '## 类继承关系')
+        table.insert(lines, '')
+        table.insert(lines, '以下类的继承关系已被识别:')
+        table.insert(lines, '')
+        for childClass, parentClasses in pairs(analysisResults.inheritanceGraph) do
+            if #parentClasses == 1 then
+                table.insert(lines, string.format('- `%s` 继承自 `%s`', childClass, parentClasses[1]))
+            else
+                table.insert(lines, string.format('- `%s` 继承自 `[%s]`', childClass, table.concat(parentClasses, ', ')))
+            end
         end
         table.insert(lines, '')
     end
@@ -547,15 +992,22 @@ local function outputMarkdown()
     if next(analysisResults.callGraph) then
         table.insert(lines, '## 方法调用图')
         table.insert(lines, '')
+        table.insert(lines, '按类型分组的方法调用统计:')
+        table.insert(lines, '')
+        
         for className, methods in pairs(analysisResults.callGraph) do
-            table.insert(lines, string.format('### %s', className))
+            table.insert(lines, string.format('### %s 类型', className))
             table.insert(lines, '')
             for methodName, calls in pairs(methods) do
                 table.insert(lines, string.format('- `%s()` 被调用 %d 次', methodName, #calls))
                 for _, call in ipairs(calls) do
                     local relativePath = furi.decode(call.uri):gsub('^.*[/\\]', '')
+                    local objectInfo = call.objectName
+                    if call.objectType and call.objectType ~= call.objectName then
+                        objectInfo = string.format('%s (%s类型)', call.objectName, call.objectType)
+                    end
                     table.insert(lines, string.format('  - %s:%d (对象: %s)', 
-                        relativePath, call.line, call.objectName))
+                        relativePath, call.line, objectInfo))
                 end
             end
             table.insert(lines, '')
@@ -655,6 +1107,18 @@ function export.runCLI()
         end
     end
     
+    if next(analysisResults.inheritanceGraph) then
+        print('')
+        print('🔗 类继承关系:')
+        for childClass, parentClasses in pairs(analysisResults.inheritanceGraph) do
+            if #parentClasses == 1 then
+                print(string.format('   %s 继承自 %s', childClass, parentClasses[1]))
+            else
+                print(string.format('   %s 继承自 [%s]', childClass, table.concat(parentClasses, ', ')))
+            end
+        end
+    end
+    
     if next(analysisResults.callGraph) then
         print('')
         print('📞 方法调用统计:')
@@ -672,14 +1136,6 @@ function export.runCLI()
     print(string.format('   节点数: %d', analysisResults.statistics.totalNodes))
     print(string.format('   关系数: %d', analysisResults.statistics.totalRelations))
     print(string.format('   处理时间: %.2f 秒', analysisResults.statistics.processingTime))
-    
-    print('')
-    print('🎯 基于lua-language-server的优势:')
-    print('   1. ✅ 完整的AST解析和语义分析')
-    print('   2. ✅ 准确的作用域和变量解析')
-    print('   3. ✅ 深度的类型推断能力')
-    print('   4. ✅ 与IDE功能保持一致的分析结果')
-    print('   5. ✅ 支持大型项目的增量分析')
     
     print('')
     print('✅ 分析任务完成！')
