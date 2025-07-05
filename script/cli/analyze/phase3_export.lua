@@ -387,21 +387,30 @@ end
 
 -- 后处理别名关系
 local function postProcessAliasRelations(ctx)
-    -- 处理别名关系，将方法名中的别名替换为真实类名
+    -- 处理别名关系，将方法名和静态函数名中的别名替换为真实类名
     for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
         if aliasInfo.type == "class_definition" then
             local targetClassName = aliasInfo.targetClass
             
-            -- 遍历所有函数实体，替换方法名中的别名
+            -- 遍历所有函数实体，替换方法名和静态函数名中的别名
             for _, entity in ipairs(ctx.entities) do
-                if entity.type == 'function' and entity.isMethod then
-                    -- 检查函数名是否包含别名前缀
-                    local aliasPrefix = aliasName .. ":"
-                    if entity.name:sub(1, #aliasPrefix) == aliasPrefix then
-                        -- 替换为真实类名
-                        local methodName = entity.name:sub(#aliasPrefix + 1)
-                        entity.name = targetClassName .. ":" .. methodName
-                        entity.className = targetClassName
+                if entity.type == 'function' then
+                    if entity.isMethod then
+                        -- 处理方法名 (aliasName:methodName -> targetClassName:methodName)
+                        local aliasPrefix = aliasName .. ":"
+                        if entity.name:sub(1, #aliasPrefix) == aliasPrefix then
+                            local methodName = entity.name:sub(#aliasPrefix + 1)
+                            entity.name = targetClassName .. ":" .. methodName
+                            entity.className = targetClassName
+                        end
+                    else
+                        -- 处理静态函数名 (aliasName.functionName -> targetClassName.functionName)
+                        local aliasPrefix = aliasName .. "."
+                        if entity.name:sub(1, #aliasPrefix) == aliasPrefix then
+                            local functionName = entity.name:sub(#aliasPrefix + 1)
+                            entity.name = targetClassName .. "." .. functionName
+                            entity.className = targetClassName
+                        end
                     end
                 end
             end

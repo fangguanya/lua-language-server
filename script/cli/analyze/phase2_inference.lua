@@ -10,99 +10,136 @@ local phase2 = {}
 
 -- 分析局部变量赋值
 local function analyzeLocalAssignment(ctx, uri, moduleId, source)
-    if not source.value then return end
+    -- local节点结构: source[1], source[2], ... 是变量名
+    -- source.value 是值的数组
+    if not source.value or not source[1] then return end
     
-    local varName = utils.getNodeName(source.node)
-    if not varName then return end
-    
-    local position = utils.getNodePosition(source)
-    local inferredType = nil
-    local confidence = 0
-    
-    -- 分析赋值值类型
-    local value = source.value
-    if value.type == 'call' then
-        -- 函数调用赋值
-        local callName = utils.getCallName(value)
-        if callName then
-            -- 检查是否是构造函数调用
-            if callName:find(':new') then
-                local className = callName:match('([^:]+):new')
-                if className then
-                    -- 查找类别名
-                    local alias = ctx.symbols.aliases[className]
-                    if alias and alias.type == 'class_definition' then
-                        inferredType = alias.targetClass
-                        confidence = 0.9
-                    else
-                        inferredType = className
-                        confidence = 0.7
+    -- 处理每个局部变量
+    for i, varNode in ipairs(source) do
+        local varName = utils.getNodeName(varNode)
+        if not varName then goto continue end
+        
+        -- 只对enemy1变量进行详细调试
+        if varName == "enemy1" then
+            print(string.format("🔍 分析局部变量赋值: %s", varName))
+        end
+        
+        local position = utils.getNodePosition(varNode)
+        local inferredType = nil
+        local confidence = 0
+        
+        -- 获取对应的值
+        local value = source.value[i]
+        if not value then goto continue end
+        
+        if varName == "enemy1" then
+            print(string.format("  值类型: %s", value.type))
+        end
+        
+        -- 分析赋值值类型
+        if value.type == 'call' then
+            -- 函数调用赋值
+            local callName = utils.getCallName(value)
+            if varName == "enemy1" then
+                print(string.format("  调用名称: %s", callName or "nil"))
+            end
+            if callName then
+                -- 检查是否是构造函数调用
+                if callName:find(':new') then
+                    local className = callName:match('([^:]+):new')
+                    if varName == "enemy1" then
+                        print(string.format("  构造函数调用，类名: %s", className or "nil"))
+                    end
+                    if className then
+                        -- 查找类别名
+                        local alias = ctx.symbols.aliases[className]
+                        if varName == "enemy1" then
+                            print(string.format("  查找别名: %s = %s", className, alias and alias.type or "nil"))
+                        end
+                        if alias and alias.type == 'class_definition' then
+                            inferredType = alias.targetClass
+                            confidence = 0.9
+                            if varName == "enemy1" then
+                                print(string.format("  ✅ 通过别名推断: %s -> %s", className, inferredType))
+                            end
+                        else
+                            inferredType = className
+                            confidence = 0.7
+                            if varName == "enemy1" then
+                                print(string.format("  ✅ 直接推断: %s", inferredType))
+                            end
+                        end
+                    end
+                elseif callName == 'require' or callName == 'kg_require' then
+                    -- require调用
+                    local modulePath = utils.getRequireModulePath(value)
+                    if modulePath then
+                        inferredType = 'module:' .. modulePath
+                        confidence = 0.8
+                        if varName == "enemy1" then
+                            print(string.format("  ✅ 模块推断: %s", inferredType))
+                        end
                     end
                 end
-            elseif callName == 'require' or callName == 'kg_require' then
-                -- require调用
-                local modulePath = utils.getRequireModulePath(value)
-                if modulePath then
-                    inferredType = 'module:' .. modulePath
-                    confidence = 0.8
+            end
+        elseif value.type == 'string' then
+            inferredType = 'string'
+            confidence = 1.0
+        elseif value.type == 'number' then
+            inferredType = 'number'
+            confidence = 1.0
+        elseif value.type == 'boolean' then
+            inferredType = 'boolean'
+            confidence = 1.0
+        elseif value.type == 'table' then
+            inferredType = 'table'
+            confidence = 0.8
+        elseif value.type == 'getlocal' or value.type == 'getglobal' then
+            -- 变量引用
+            local refName = utils.getNodeName(value)
+            if refName then
+                -- 查找引用变量的类型
+                local refType = ctx.types.inferred[refName]
+                if refType then
+                    inferredType = refType.type
+                    confidence = refType.confidence * 0.8
                 end
             end
         end
-    elseif value.type == 'string' then
-        inferredType = 'string'
-        confidence = 1.0
-    elseif value.type == 'number' then
-        inferredType = 'number'
-        confidence = 1.0
-    elseif value.type == 'boolean' then
-        inferredType = 'boolean'
-        confidence = 1.0
-    elseif value.type == 'table' then
-        inferredType = 'table'
-        confidence = 0.8
-    elseif value.type == 'getlocal' or value.type == 'getglobal' then
-        -- 变量引用
-        local refName = utils.getNodeName(value)
-        if refName then
-            -- 查找引用变量的类型
-            local refType = ctx.types.inferred[refName]
-            if refType then
-                inferredType = refType.type
-                confidence = refType.confidence * 0.8
-            end
+        
+        -- 记录推断结果
+        if inferredType then
+            local varId = context.addSymbol(ctx, 'variable', {
+                name = varName,
+                module = moduleId,
+                uri = uri,
+                position = position,
+                scope = utils.getScopeInfo(source),
+                assignmentType = 'local',
+                inferredType = inferredType,
+                confidence = confidence
+            })
+            
+            -- 添加到类型推断结果
+            ctx.types.inferred[varId] = {
+                type = inferredType,
+                confidence = confidence,
+                source = 'local_assignment'
+            }
+            
+            context.debug(ctx, "局部变量类型推断: %s -> %s (%.1f)", varName, inferredType, confidence)
+        else
+            -- 添加到待推断列表
+            table.insert(ctx.types.pending, {
+                name = varName,
+                module = moduleId,
+                uri = uri,
+                position = position,
+                source = source
+            })
         end
-    end
-    
-    -- 记录推断结果
-    if inferredType then
-        local varId = context.addSymbol(ctx, 'variable', {
-            name = varName,
-            module = moduleId,
-            uri = uri,
-            position = position,
-            scope = utils.getScopeInfo(source),
-            assignmentType = 'local',
-            inferredType = inferredType,
-            confidence = confidence
-        })
         
-        -- 添加到类型推断结果
-        ctx.types.inferred[varId] = {
-            type = inferredType,
-            confidence = confidence,
-            source = 'local_assignment'
-        }
-        
-        context.debug(ctx, "局部变量类型推断: %s -> %s (%.1f)", varName, inferredType, confidence)
-    else
-        -- 添加到待推断列表
-        table.insert(ctx.types.pending, {
-            name = varName,
-            module = moduleId,
-            uri = uri,
-            position = position,
-            source = source
-        })
+        ::continue::
     end
 end
 
@@ -222,7 +259,7 @@ local function analyzeFileTypes(ctx, uri)
     
     -- 遍历AST节点
     guide.eachSource(state.ast, function(source)
-        if source.type == 'setlocal' then
+        if source.type == 'local' then
             analyzeLocalAssignment(ctx, uri, moduleId, source)
         elseif source.type == 'function' then
             analyzeFunctionParameters(ctx, uri, moduleId, source)

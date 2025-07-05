@@ -14,6 +14,30 @@ local function analyzeFunctionCall(ctx, uri, moduleId, source)
     local callName = utils.getCallName(source)
     if not callName then return end
     
+    -- 应用别名关系处理，将调用名称转换为真实名称
+    local resolvedCallName = callName
+    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+        if aliasInfo.type == "class_definition" then
+            local targetClassName = aliasInfo.targetClass
+            
+            -- 处理静态函数调用 (aliasName.functionName -> targetClassName.functionName)
+            local aliasPrefix = aliasName .. "."
+            if callName:sub(1, #aliasPrefix) == aliasPrefix then
+                local functionName = callName:sub(#aliasPrefix + 1)
+                resolvedCallName = targetClassName .. "." .. functionName
+                break
+            end
+            
+            -- 处理方法调用 (aliasName:methodName -> targetClassName:methodName)
+            local aliasMethodPrefix = aliasName .. ":"
+            if callName:sub(1, #aliasMethodPrefix) == aliasMethodPrefix then
+                local methodName = callName:sub(#aliasMethodPrefix + 1)
+                resolvedCallName = targetClassName .. ":" .. methodName
+                break
+            end
+        end
+    end
+    
     local position = utils.getNodePosition(source)
     local filePath = furi.decode(uri)
     
@@ -33,10 +57,36 @@ local function analyzeFunctionCall(ctx, uri, moduleId, source)
         callerName = utils.getFunctionName(callerFunction) or "anonymous"
     end
     
-    -- 查找被调用函数实体
+    -- 对调用者函数名称也应用别名处理
+    local resolvedCallerName = callerName
+    if callerName ~= "global" and callerName ~= "anonymous" then
+        for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+            if aliasInfo.type == "class_definition" then
+                local targetClassName = aliasInfo.targetClass
+                
+                -- 处理静态函数调用 (aliasName.functionName -> targetClassName.functionName)
+                local aliasPrefix = aliasName .. "."
+                if callerName:sub(1, #aliasPrefix) == aliasPrefix then
+                    local functionName = callerName:sub(#aliasPrefix + 1)
+                    resolvedCallerName = targetClassName .. "." .. functionName
+                    break
+                end
+                
+                -- 处理方法调用 (aliasName:methodName -> targetClassName:methodName)
+                local aliasMethodPrefix = aliasName .. ":"
+                if callerName:sub(1, #aliasMethodPrefix) == aliasMethodPrefix then
+                    local methodName = callerName:sub(#aliasMethodPrefix + 1)
+                    resolvedCallerName = targetClassName .. ":" .. methodName
+                    break
+                end
+            end
+        end
+    end
+    
+    -- 查找被调用函数实体（使用解析后的名称）
     local calleeEntityId = nil
     for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'function' and entity.name == callName then
+        if entity.type == 'function' and entity.name == resolvedCallName then
             calleeEntityId = entity.id
             break
         end
@@ -45,14 +95,14 @@ local function analyzeFunctionCall(ctx, uri, moduleId, source)
     -- 查找调用者函数实体
     local callerEntityId = nil
     for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'function' and entity.name == callerName then
+        if entity.type == 'function' and entity.name == resolvedCallerName then
             callerEntityId = entity.id
             break
         end
     end
     
     -- 如果找不到调用者，创建一个全局调用上下文
-    if not callerEntityId and callerName == "global" then
+    if not callerEntityId and resolvedCallerName == "global" then
         callerEntityId = context.addEntity(ctx, 'function', {
             name = "global",
             isMethod = false,
@@ -75,7 +125,7 @@ local function analyzeFunctionCall(ctx, uri, moduleId, source)
     if callerEntityId and calleeEntityId then
         context.addRelation(ctx, 'calls', callerEntityId, calleeEntityId, {
             relationship = 'function_call',
-            callName = callName,
+            callName = resolvedCallName,  -- 使用解析后的名称
             sourceLocation = {
                 file = filePath,
                 line = position.line,
@@ -83,19 +133,9 @@ local function analyzeFunctionCall(ctx, uri, moduleId, source)
             }
         })
         
-        context.debug(ctx, "函数调用: %s -> %s", callerName, callName)
+        context.debug(ctx, "函数调用: %s -> %s (原始: %s)", resolvedCallerName, resolvedCallName, callName)
     else
-        -- 注意：外部调用不需要记录
-        -- context.addRelation(ctx, 'external_call', callerEntityId or "unknown", callName, {
-        --     relationship = 'external_function_call',
-        --     callName = callName,
-        --     sourceLocation = {
-        --         file = filePath,
-        --         line = position.line,
-        --         column = position.column
-        --     }
-        -- })
-        -- context.debug(ctx, "外部调用: %s -> %s", callerName, callName)
+        context.debug(ctx, "未找到函数调用匹配: %s -> %s (解析为: %s)", resolvedCallerName, callName, resolvedCallName)
     end
 end
 
