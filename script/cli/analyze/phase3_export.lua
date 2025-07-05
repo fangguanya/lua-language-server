@@ -387,13 +387,8 @@ end
 
 -- 后处理别名关系
 local function postProcessAliasRelations(ctx)
-    print("  开始后处理别名关系...")
-    
     -- 处理别名关系，将方法名中的别名替换为真实类名
-    local replacementCount = 0
     for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-        print(string.format("  🔍 处理别名: %s -> %s", aliasName, aliasInfo.targetClass))
-        
         if aliasInfo.type == "class_definition" then
             local targetClassName = aliasInfo.targetClass
             
@@ -405,19 +400,13 @@ local function postProcessAliasRelations(ctx)
                     if entity.name:sub(1, #aliasPrefix) == aliasPrefix then
                         -- 替换为真实类名
                         local methodName = entity.name:sub(#aliasPrefix + 1)
-                        local oldName = entity.name
                         entity.name = targetClassName .. ":" .. methodName
                         entity.className = targetClassName
-                        
-                        replacementCount = replacementCount + 1
-                        print(string.format("  ✅ 别名替换: %s -> %s", oldName, entity.name))
                     end
                 end
             end
         end
     end
-    
-    print(string.format("  ✅ 别名关系后处理完成，共替换 %d 个方法名", replacementCount))
 end
 
 -- 主分析函数
