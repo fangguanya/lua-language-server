@@ -3,6 +3,7 @@
 
 local furi = require 'file-uri'
 local files = require 'files'
+local util = require 'utility'
 
 local context = {}
 
@@ -81,19 +82,47 @@ end
 function context.getFiles(ctx)
     local uris = {}
     
-    if ctx.options.files then
-        -- 分析指定文件
-        for _, filePath in ipairs(ctx.options.files) do
-            local uri = furi.encode(filePath)
-            if uri then
-                table.insert(uris, uri)
-            end
-        end
-    else
-        -- 分析目录下所有文件
-        uris = files.getChildFiles(ctx.rootUri)
+    -- 手动扫描文件并添加到workspace
+    local fs = require 'bee.filesystem'
+    local furi = require 'file-uri'
+    local files = require 'files'
+    
+    -- 将URI转换为路径
+    local rootPath = furi.decode(ctx.rootUri)
+    if not rootPath then
+        return uris
     end
     
+    -- 递归扫描.lua文件
+    local function scanDirectory(path)
+        local dirPath = fs.path(path)
+        if not fs.exists(dirPath) or not fs.is_directory(dirPath) then
+            return
+        end
+        
+        -- 使用fs.pairs遍历目录
+        for fullpath, status in fs.pairs(dirPath) do
+            local pathString = fullpath:string()
+            local st = status:type()
+            
+            if st == 'directory' or st == 'symlink' or st == 'junction' then
+                -- 递归扫描子目录
+                scanDirectory(pathString)
+            elseif st == 'file' or st == 'regular' then
+                -- 检查是否是.lua文件
+                if pathString:match('%.lua$') then
+                    local uri = furi.encode(pathString)
+                    if uri then
+                        table.insert(uris, uri)
+                        -- 手动添加到files模块
+                        files.setText(uri, util.loadFile(pathString) or "")
+                    end
+                end
+            end
+        end
+    end
+    
+    scanDirectory(rootPath)
     return uris
 end
 
@@ -109,11 +138,21 @@ function context.addSymbol(ctx, symbolType, symbolData)
     local id = context.generateId(ctx, symbolType)
     symbolData.id = id
     
+    -- 符号表名称映射
+    local symbolTableNames = {
+        module = "modules",
+        class = "classes", 
+        ["function"] = "functions",
+        variable = "variables"
+    }
+    
+    local tableName = symbolTableNames[symbolType] or (symbolType .. 's')
+    
     -- 确保符号表存在
-    local symbolTable = ctx.symbols[symbolType .. 's']
+    local symbolTable = ctx.symbols[tableName]
     if not symbolTable then
-        ctx.symbols[symbolType .. 's'] = {}
-        symbolTable = ctx.symbols[symbolType .. 's']
+        ctx.symbols[tableName] = {}
+        symbolTable = ctx.symbols[tableName]
     end
     
     symbolTable[id] = symbolData
@@ -123,7 +162,16 @@ end
 
 -- 查找符号
 function context.findSymbol(ctx, symbolType, predicate)
-    local symbolTable = ctx.symbols[symbolType .. 's']
+    -- 符号表名称映射
+    local symbolTableNames = {
+        module = "modules",
+        class = "classes", 
+        ["function"] = "functions",
+        variable = "variables"
+    }
+    
+    local tableName = symbolTableNames[symbolType] or (symbolType .. 's')
+    local symbolTable = ctx.symbols[tableName]
     if not symbolTable then
         return nil
     end

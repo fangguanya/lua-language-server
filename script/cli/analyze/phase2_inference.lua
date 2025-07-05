@@ -217,7 +217,7 @@ local function analyzeFileTypes(ctx, uri)
         return
     end
     
-    local moduleId = utils.getModuleId(uri)
+    local moduleId = utils.getModulePath(uri, ctx.rootUri)
     context.debug(ctx, "分析文件类型推断: %s", moduleId)
     
     -- 遍历AST节点
@@ -253,7 +253,7 @@ function phase2.analyze(ctx)
     for i, uri in ipairs(uris) do
         local state = files.getState(uri)
         if state and state.ast then
-            local moduleId = utils.getModuleId(uri)
+            local moduleId = utils.getModulePath(uri, ctx.rootUri)
             guide.eachSource(state.ast, function(source)
                 if source.type == 'call' then
                     analyzeFunctionCall(ctx, uri, moduleId, source)

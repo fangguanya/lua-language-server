@@ -60,6 +60,9 @@ function analyzeSymbolDefinition(ctx, uri, moduleId, source)
         analyzeFunctionDefinition(ctx, uri, moduleId, source)
     elseif sourceType == 'return' then
         analyzeReturnStatement(ctx, uri, moduleId, source)
+    elseif sourceType == 'local' then
+        -- 处理local节点（包含变量定义）
+        analyzeLocalStatement(ctx, uri, moduleId, source)
     end
 end
 
@@ -115,7 +118,6 @@ function analyzeRequireStatement(ctx, uri, moduleId, source, varName, position)
     if not modulePath then return end
     
     local moduleType = modulePath:match("([^./]+)$") or modulePath
-    local className = utils.moduleToClassName(moduleType)
     
     -- 创建模块导入符号
     local importId = context.addSymbol(ctx, 'variable', {
@@ -125,19 +127,17 @@ function analyzeRequireStatement(ctx, uri, moduleId, source, varName, position)
         position = position,
         isImport = true,
         importPath = modulePath,
-        importedModule = moduleType,
-        expectedClass = className
+        importedModule = moduleType
     })
     
-    -- 注册别名映射
+    -- 注册别名映射（稍后在找到实际类定义时会更新）
     ctx.symbols.aliases[varName] = {
         type = 'module_import',
         targetModule = moduleType,
-        targetClass = className,
         symbolId = importId
     }
     
-    print(string.format("    ✅ require识别: %s = require('%s') → %s类", varName, modulePath, className))
+    print(string.format("    ✅ require识别: %s = require('%s') → 模块 %s", varName, modulePath, moduleType))
     
     -- 将导入添加到模块中
     local moduleSymbol = ctx.symbols.modules[moduleId]
@@ -205,18 +205,53 @@ function analyzeCallDefinition(ctx, uri, moduleId, source)
     
     -- 查找关联的变量（通过parent关系）
     local parent = source.parent
+    
+    -- 寻找变量名的多种方式
+    local varName = nil
+    
+    -- 方式1：直接parent是setlocal/setglobal/local
     if parent and (parent.type == 'setlocal' or parent.type == 'setglobal') then
-        local varName = utils.getNodeName(parent.node)
-        if varName then
-            -- 注册别名映射
-            ctx.symbols.aliases[varName] = {
-                type = 'class_definition',
-                targetClass = className,
-                symbolId = classId
-            }
-            
-            print(string.format("    ✅ 类定义: %s (定义方式: %s, 变量: %s)", className, funcName, varName))
+        varName = utils.getNodeName(parent.node)
+    elseif parent and parent.type == 'local' then
+        varName = parent[1] -- local节点的变量名在[1]中
+    end
+    
+    -- 方式2：parent是select，需要向上寻找
+    if not varName and parent then
+        local grandparent = parent.parent
+        if grandparent and (grandparent.type == 'setlocal' or grandparent.type == 'setglobal') then
+            varName = utils.getNodeName(grandparent.node)
+        elseif grandparent and grandparent.type == 'local' then
+            varName = grandparent[1] -- local节点的变量名在[1]中
         end
+    end
+    
+    -- 方式3：通过call节点的parent寻找
+    if not varName then
+        local currentNode = source
+        while currentNode and currentNode.parent do
+            currentNode = currentNode.parent
+            if currentNode.type == 'setlocal' or currentNode.type == 'setglobal' then
+                varName = utils.getNodeName(currentNode.node)
+                break
+            elseif currentNode.type == 'local' then
+                varName = currentNode[1] -- local节点的变量名在[1]中
+                break
+            end
+        end
+    end
+    
+    if varName then
+        -- 注册别名映射
+        ctx.symbols.aliases[varName] = {
+            type = 'class_definition',
+            targetClass = className,
+            symbolId = classId
+        }
+        
+        context.debug(ctx, "类定义: %s (变量: %s)", className, varName)
+    else
+        print(string.format("    ⚠️  未找到关联变量，parent类型: %s", parent and parent.type or "nil"))
     end
     
     -- 将类添加到模块中
@@ -305,13 +340,15 @@ function analyzeFunctionDefinition(ctx, uri, moduleId, source)
         table.insert(moduleSymbol.functions, funcId)
     end
     
-    -- 如果是类方法，添加到类中
+    -- 如果是类方法或静态函数，添加到类中
     if className then
         local alias = ctx.symbols.aliases[className]
         if alias and alias.type == 'class_definition' then
             local classSymbol = ctx.symbols.classes[alias.symbolId]
             if classSymbol then
                 table.insert(classSymbol.methods, funcId)
+                context.debug(ctx, "方法关联: %s -> %s (%s)", 
+                    funcName, classSymbol.name, isMethod and "方法" or "静态函数")
             end
         end
     end
@@ -352,6 +389,59 @@ function analyzeReturnStatement(ctx, uri, moduleId, source)
     end
 end
 
+-- 分析local语句
+function analyzeLocalStatement(ctx, uri, moduleId, source)
+    if not source.keys or not source.values then return end
+    
+    -- 处理每个变量定义
+    for i, key in ipairs(source.keys) do
+        local varName = utils.getNodeName(key)
+        if varName then
+            local position = utils.getNodePosition(key)
+            local scope = utils.getScopeInfo(source)
+            local value = source.values[i]
+            
+            -- 检查是否是require语句
+            if value and value.type == 'call' then
+                local callNode = value.node
+                if callNode and callNode.type == 'getglobal' then
+                    local funcName = utils.getNodeName(callNode)
+                    
+                    if utils.isRequireFunction(funcName, ctx.config.requireFunctions) then
+                        analyzeRequireStatement(ctx, uri, moduleId, {
+                            node = key,
+                            value = value,
+                            type = 'setlocal'
+                        }, varName, position)
+                        goto continue
+                    end
+                end
+            end
+            
+            -- 普通变量定义
+            local varId = context.addSymbol(ctx, 'variable', {
+                name = varName,
+                module = moduleId,
+                uri = uri,
+                scope = scope,
+                position = position,
+                isGlobal = false,
+                valueType = value and value.type or 'unknown'
+            })
+            
+            -- 将变量添加到模块中
+            local moduleSymbol = ctx.symbols.modules[moduleId]
+            if moduleSymbol then
+                table.insert(moduleSymbol.variables, varId)
+            end
+            
+            context.debug(ctx, "局部变量定义: %s (ID: %s)", varName, varId)
+            
+            ::continue::
+        end
+    end
+end
+
 -- 主分析函数
 function phase1.analyze(ctx)
     local uris = context.getFiles(ctx)
@@ -367,6 +457,37 @@ function phase1.analyze(ctx)
             print(string.format("  进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
         end
     end
+    
+    -- 后处理：重新关联类方法和静态函数
+    context.debug(ctx, "后处理：重新关联类方法和静态函数")
+    local methodsLinked = 0
+    for funcId, func in pairs(ctx.symbols.functions) do
+        -- 处理类方法（isMethod=true）和静态函数（className存在但isMethod=false）
+        if func.className then
+            local alias = ctx.symbols.aliases[func.className]
+            if alias and alias.type == 'class_definition' then
+                local classSymbol = ctx.symbols.classes[alias.symbolId]
+                if classSymbol then
+                    -- 检查是否已经关联
+                    local alreadyLinked = false
+                    for _, methodId in ipairs(classSymbol.methods) do
+                        if methodId == funcId then
+                            alreadyLinked = true
+                            break
+                        end
+                    end
+                    
+                    if not alreadyLinked then
+                        table.insert(classSymbol.methods, funcId)
+                        methodsLinked = methodsLinked + 1
+                        context.debug(ctx, "重新关联: %s -> %s (%s)", 
+                            func.name, classSymbol.name, func.isMethod and "方法" or "静态函数")
+                    end
+                end
+            end
+        end
+    end
+    context.debug(ctx, "重新关联了 %d 个方法和静态函数", methodsLinked)
     
     -- 统计信息
     local moduleCount = utils.tableSize(ctx.symbols.modules)

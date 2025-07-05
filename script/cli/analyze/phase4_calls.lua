@@ -85,18 +85,17 @@ local function analyzeFunctionCall(ctx, uri, moduleId, source)
         
         context.debug(ctx, "函数调用: %s -> %s", callerName, callName)
     else
-        -- 记录外部调用
-        context.addRelation(ctx, 'external_call', callerEntityId or "unknown", callName, {
-            relationship = 'external_function_call',
-            callName = callName,
-            sourceLocation = {
-                file = filePath,
-                line = position.line,
-                column = position.column
-            }
-        })
-        
-        context.debug(ctx, "外部调用: %s -> %s", callerName, callName)
+        -- 注意：外部调用不需要记录
+        -- context.addRelation(ctx, 'external_call', callerEntityId or "unknown", callName, {
+        --     relationship = 'external_function_call',
+        --     callName = callName,
+        --     sourceLocation = {
+        --         file = filePath,
+        --         line = position.line,
+        --         column = position.column
+        --     }
+        -- })
+        -- context.debug(ctx, "外部调用: %s -> %s", callerName, callName)
     end
 end
 
@@ -214,7 +213,7 @@ local function analyzeFileCalls(ctx, uri)
         return
     end
     
-    local moduleId = utils.getModuleId(uri)
+    local moduleId = utils.getModulePath(uri, ctx.rootUri)
     context.debug(ctx, "分析文件调用关系: %s", moduleId)
     
     -- 遍历AST节点

@@ -31,34 +31,28 @@ function utils.getModulePath(uri, rootUri)
     return modulePath
 end
 
--- 获取模块ID（简化版本）
-function utils.getModuleId(uri)
-    local filePath = furi.decode(uri)
-    if not filePath then
-        return "unknown"
+-- 获取模块中定义的类名列表
+function utils.getClassNamesFromModule(ctx, moduleId)
+    local classNames = {}
+    local moduleSymbol = ctx.symbols.modules[moduleId]
+    if moduleSymbol and moduleSymbol.classes then
+        for _, classId in ipairs(moduleSymbol.classes) do
+            local classSymbol = ctx.symbols.classes[classId]
+            if classSymbol then
+                table.insert(classNames, classSymbol.name)
+            end
+        end
     end
-    
-    -- 提取文件名并去掉扩展名
-    local fileName = filePath:match("([^/\\]+)%.lua$")
-    if not fileName then
-        return "unknown"
-    end
-    
-    -- 构建模块路径
-    local relativePath = filePath:match("test[/\\]c7_test[/\\](.+)%.lua$")
-    if relativePath then
-        -- 替换路径分隔符为点
-        local modulePath = relativePath:gsub("[/\\]", ".")
-        return modulePath
-    end
-    
-    return fileName
+    return classNames
 end
 
--- 将模块名转换为类名（首字母大写）
-function utils.moduleToClassName(moduleName)
-    if not moduleName then return nil end
-    return moduleName:gsub("^%l", string.upper)
+-- 获取模块的主要类名（如果只有一个类）
+function utils.getMainClassFromModule(ctx, moduleId)
+    local classNames = utils.getClassNamesFromModule(ctx, moduleId)
+    if #classNames == 1 then
+        return classNames[1]
+    end
+    return nil
 end
 
 -- 获取AST节点的位置信息

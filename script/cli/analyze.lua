@@ -19,31 +19,15 @@ function export.runCLI()
     lang(LOCALE)
     
     -- 检查分析目标
-    if not ANALYZE and not ANALYZE_FILES and not ANALYZE_FOLDERS then
+    if not ANALYZE then
         print('错误: 必须指定分析目标')
-        print('使用 --analyze=目录 或设置 ANALYZE_FILES/ANALYZE_FOLDERS 环境变量')
+        print('使用 --analyze=目录')
         return 1
     end
     
     -- 确定根路径
-    local rootPath
-    local rootUri
-    
-    if ANALYZE then
-        rootPath = fs.canonical(fs.path(ANALYZE)):string()
-        rootUri = furi.encode(rootPath)
-    elseif ANALYZE_FOLDERS then
-        -- 使用第一个文件夹作为根路径
-        local firstFolder = ANALYZE_FOLDERS:match("([^,]+)")
-        if firstFolder then
-            rootPath = fs.canonical(fs.path(firstFolder:match("^%s*(.-)%s*$"))):string()
-            rootUri = furi.encode(rootPath)
-        end
-    else
-        -- 使用当前目录作为根路径
-        rootPath = fs.current_path():string()
-        rootUri = furi.encode(rootPath)
-    end
+    local rootPath = fs.canonical(fs.path(ANALYZE)):string()
+    local rootUri = furi.encode(rootPath)
     
     if not rootUri then
         print(string.format('错误: 无法创建URI: %s', rootPath))
@@ -60,7 +44,7 @@ function export.runCLI()
     
     ---@async
     xpcall(lclient.start, errorhandler, lclient, function (client)
-        await.disable()
+        await.disable()  -- 禁用await模式
         client:registerFakers()
         
         client:initialize {
@@ -70,29 +54,24 @@ function export.runCLI()
         print('正在初始化工作空间...')
         
         provider.updateConfig(rootUri)
-        ws.awaitReady(rootUri)
+        -- ws.awaitReady(rootUri)  -- 暂时跳过这个，可能导致挂起
         
         print('工作空间初始化完成')
         
         -- 使用新的模块化分析器
+        print('正在加载分析器模块...')
         local analyzer = require 'cli.analyze.init'
-        local config = require 'cli.analyze.config'
+        print('分析器模块加载完成')
         
         -- 创建分析选项
-        local options = config.create({
+        local options = {
             debug = ANALYZE_DEBUG == "true" or ANALYZE_DEBUG == "1"
-        })
-        
-        -- 如果指定了文件，添加到选项中
-        if ANALYZE_FILES then
-            options.files = {}
-            for file in string.gmatch(ANALYZE_FILES, "[^,]+") do
-                table.insert(options.files, file:match("^%s*(.-)%s*$")) -- trim
-            end
-        end
+        }
         
         -- 运行分析
+        print('开始运行分析...')
         local ctx = analyzer.analyze(rootUri, options)
+        print('分析运行完成')
         
         -- 输出结果（使用旧的输出格式作为兼容）
         local jsonFile = ANALYZE_OUTPUT or (rootPath .. '/lua_analysis_output.json')

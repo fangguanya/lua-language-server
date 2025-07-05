@@ -54,8 +54,6 @@ local function exportFolderNodes(ctx)
                 column = nil
             }
         })
-        
-        context.debug(ctx, "导出文件夹: %s (Level: %d)", path, folder.level)
     end
 end
 
@@ -78,8 +76,6 @@ local function exportModuleNodes(ctx)
                 column = 1
             }
         })
-        
-        context.debug(ctx, "导出模块: %s", module.name)
     end
 end
 
@@ -102,48 +98,77 @@ local function exportClassNodes(ctx)
                 column = class.position.column
             }
         })
-        
-        context.debug(ctx, "导出类: %s (%s)", class.name, class.defineType)
     end
 end
 
--- 获取函数完整源代码
-local function getFunctionSourceCode(uri, position)
+-- 获取函数完整源代码和偏移信息
+local function getFunctionSourceCode(uri, funcSymbol)
     local state = files.getState(uri)
     if not state or not state.ast then
-        return nil
+        return nil, nil, nil
     end
     
     local text = files.getText(uri)
     if not text then
-        return nil
+        return nil, nil, nil
     end
     
-    -- 查找函数节点
+    -- 查找函数节点 - 使用名称和位置匹配
     local functionNode = nil
     guide.eachSource(state.ast, function(source)
         if source.type == 'function' then
-            local nodePos = utils.getNodePosition(source)
-            if nodePos and nodePos.line == position.line and nodePos.column == position.column then
-                functionNode = source
-                return false -- 停止遍历
+            -- 获取函数的起始位置
+            local start, finish = guide.getRange(source)
+            if start and finish then
+                -- 转换为行列位置 - 使用正确的API
+                local startRow, startCol = guide.rowColOf(start)
+                
+                -- 检查是否匹配位置（行号从1开始）
+                if startRow == funcSymbol.position.line then
+                    functionNode = source
+                    return false -- 停止遍历
+                end
             end
         end
     end)
     
     if not functionNode then
-        return nil
+        -- 如果没找到，尝试更宽松的匹配
+        guide.eachSource(state.ast, function(source)
+            if source.type == 'function' then
+                local start, finish = guide.getRange(source)
+                if start and finish then
+                    local startRow, startCol = guide.rowColOf(start)
+                    -- 允许行号相差1的情况
+                    if math.abs(startRow - funcSymbol.position.line) <= 1 then
+                        functionNode = source
+                        return false
+                    end
+                end
+            end
+        end)
+    end
+    
+    if not functionNode then
+        return nil, nil, nil
     end
     
     -- 获取函数的起始和结束位置
-    local startPos = functionNode.start
-    local finishPos = functionNode.finish
+    local startPos, finishPos = guide.getRange(functionNode)
     
     if startPos and finishPos then
-        return text:sub(startPos, finishPos)
+        -- 转换为字节偏移
+        local startOffset = guide.positionToOffset(state, startPos)
+        local finishOffset = guide.positionToOffset(state, finishPos)
+        
+        -- 确保位置有效
+        if startOffset and finishOffset and startOffset > 0 and finishOffset > startOffset and finishOffset <= #text then
+            local sourceCode = text:sub(startOffset, finishOffset)
+            return sourceCode, startOffset - 1, finishOffset - 1 -- 转换为0基索引
+        end
     end
     
-    return nil
+    return nil, nil, nil
 end
 
 -- 导出函数节点
@@ -151,8 +176,8 @@ local function exportFunctionNodes(ctx)
     for funcId, func in pairs(ctx.symbols.functions) do
         local filePath = furi.decode(func.uri)
         
-        -- 获取函数完整源代码
-        local sourceCode = getFunctionSourceCode(func.uri, func.position)
+        -- 获取函数完整源代码和偏移信息
+        local sourceCode, startPos, finishPos = getFunctionSourceCode(func.uri, func)
         
         local entityId = context.addEntity(ctx, 'function', {
             name = func.name,
@@ -162,7 +187,9 @@ local function exportFunctionNodes(ctx)
             scope = func.scope,
             isAnonymous = func.isAnonymous or false,
             module = func.module,
-            sourceCode = sourceCode,
+            sourceCode = sourceCode or "",
+            sourceStartOffset = startPos,
+            sourceEndOffset = finishPos,
             category = 'function',
             sourceLocation = {
                 file = filePath,
@@ -170,8 +197,6 @@ local function exportFunctionNodes(ctx)
                 column = func.position.column
             }
         })
-        
-        context.debug(ctx, "导出函数: %s", func.name)
     end
 end
 
@@ -204,8 +229,6 @@ local function exportVariableNodes(ctx)
                 column = variable.position.column
             }
         })
-        
-        context.debug(ctx, "导出变量: %s (类型: %s)", variable.name, variableType)
     end
 end
 
@@ -362,6 +385,41 @@ local function exportFolderContainmentRelations(ctx)
     end
 end
 
+-- 后处理别名关系
+local function postProcessAliasRelations(ctx)
+    print("  开始后处理别名关系...")
+    
+    -- 处理别名关系，将方法名中的别名替换为真实类名
+    local replacementCount = 0
+    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+        print(string.format("  🔍 处理别名: %s -> %s", aliasName, aliasInfo.targetClass))
+        
+        if aliasInfo.type == "class_definition" then
+            local targetClassName = aliasInfo.targetClass
+            
+            -- 遍历所有函数实体，替换方法名中的别名
+            for _, entity in ipairs(ctx.entities) do
+                if entity.type == 'function' and entity.isMethod then
+                    -- 检查函数名是否包含别名前缀
+                    local aliasPrefix = aliasName .. ":"
+                    if entity.name:sub(1, #aliasPrefix) == aliasPrefix then
+                        -- 替换为真实类名
+                        local methodName = entity.name:sub(#aliasPrefix + 1)
+                        local oldName = entity.name
+                        entity.name = targetClassName .. ":" .. methodName
+                        entity.className = targetClassName
+                        
+                        replacementCount = replacementCount + 1
+                        print(string.format("  ✅ 别名替换: %s -> %s", oldName, entity.name))
+                    end
+                end
+            end
+        end
+    end
+    
+    print(string.format("  ✅ 别名关系后处理完成，共替换 %d 个方法名", replacementCount))
+end
+
 -- 主分析函数
 function phase3.analyze(ctx)
     print("  导出实体节点...")
@@ -379,6 +437,9 @@ function phase3.analyze(ctx)
     exportInheritanceRelations(ctx)
     exportContainmentRelations(ctx)
     exportFolderContainmentRelations(ctx)
+    
+    -- 后处理别名关系
+    postProcessAliasRelations(ctx)
     
     -- 统计信息
     local entityCount = #ctx.entities

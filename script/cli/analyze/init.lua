@@ -12,7 +12,6 @@ analyzer.phase4 = require 'cli.analyze.phase4_calls'        -- 函数调用分�
 -- 导入工具模块
 analyzer.context = require 'cli.analyze.context'            -- 全局上下文管理
 analyzer.utils = require 'cli.analyze.utils'                -- 工具函数
-analyzer.config = require 'cli.analyze.config'              -- 配置管理
 
 -- 分析器主流程
 function analyzer.analyze(rootUri, options)
