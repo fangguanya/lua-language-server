@@ -606,4 +606,49 @@ function context.findVariableSymbol(ctx, name, scope)
     return nil, nil
 end
 
+-- 查找任意类型的符号（按名称）
+function context.findSymbolByName(ctx, name, scope)
+    -- 首先在指定作用域查找
+    if scope then
+        -- 查找作用域内的变量
+        for _, varId in ipairs(scope.variables or {}) do
+            local var = ctx.symbols[varId]
+            if var and var.name == name then
+                return varId, var
+            end
+        end
+        
+        -- 查找作用域内的方法
+        for _, methodId in ipairs(scope.methods or {}) do
+            local method = ctx.symbols[methodId]
+            if method and method.name == name then
+                return methodId, method
+            end
+        end
+    end
+    
+    -- 在全局范围查找所有类型的符号
+    for id, symbol in pairs(ctx.symbols) do
+        if symbol.name == name then
+            return id, symbol
+        end
+    end
+    
+    -- 在类名中查找
+    for className, class in pairs(ctx.classes) do
+        if className == name then
+            return class.id, class
+        end
+    end
+    
+    -- 在模块名中查找
+    for moduleName, module in pairs(ctx.modules) do
+        if moduleName == name then
+            return module.id, module
+        end
+    end
+    
+    return nil, nil
+end
+
 return context 

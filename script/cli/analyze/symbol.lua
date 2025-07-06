@@ -71,7 +71,8 @@ end
 local class = {}
 function class.new(sym_id, name, ast)
     local cls = scope.new(sym_id, name, SYMBOL_TYPE.CLASS, ast)
-    cls.aliases = {}  -- 指向此类的别名列表
+    cls.mixins = {}   -- 混入组件列表
+    cls.parentClasses = {} -- 父类列表
     applyMethods(cls, class)
     return cls
 end

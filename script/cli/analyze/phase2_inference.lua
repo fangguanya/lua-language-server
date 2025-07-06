@@ -279,9 +279,9 @@ local function inferTypesFromCalls(ctx)
                         for methodName, _ in pairs(classSymbol.methods) do
                             if methodName == callInfo.method then
                                 inferredType = className
-                                break
-                            end
-                        end
+            break
+        end
+    end
                     end
                     if inferredType then break end
                 end

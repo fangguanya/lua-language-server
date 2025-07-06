@@ -545,75 +545,201 @@ function analyzeFunctionBody(ctx, uri, module, method, funcSource)
     -- 避免重复处理同一个AST节点
 end
 
--- 解析父类信息，支持多种类型的父类引用
-local function parseParentClass(ctx, arg, module)
-    if not arg then
-        return nil
-    end
+-- 解析父类参数 - 在第一阶段就完成解析，转换为SYMBOL_ID或字符串名称
+function parseParentClass(ctx, arg, module)
+    if not arg then return nil end
     
     local argType = arg.type
     
     if argType == 'string' then
-        -- 字符串字面量父类
+        -- 字符串形式的父类名
         local parentName = utils.getStringValue(arg)
         if parentName then
-            return {
-                type = 'string',
-                name = parentName,
-                resolved = true,
-                source = arg
-            }
+            -- 尝试在当前符号表中查找对应的类或变量
+            local symbolId, _ = context.findSymbolByName(ctx, parentName, module)
+            if symbolId then
+                return {
+                    type = 'resolved_symbol',
+                    name = parentName,
+                    resolved = true,
+                    source = arg,
+                    symbolId = symbolId,
+                    description = string.format("已解析字符串父类: %s -> %s", parentName, symbolId)
+                }
+            else
+                -- 保留字符串名称
+                return {
+                    type = 'string',
+                    name = parentName,
+                    resolved = true,
+                    source = arg,
+                    symbolId = parentName, -- 使用字符串名称作为标识
+                    description = string.format("字符串父类: %s", parentName)
+                }
+            end
         end
     elseif argType == 'getlocal' or argType == 'getglobal' then
-        -- 变量引用父类
+        -- 变量引用的父类
         local varName = utils.getNodeName(arg)
         if varName then
-            return {
-                type = 'variable',
-                name = varName,
-                resolved = false,
-                source = arg,
-                needsResolution = true
-            }
+            -- 查找变量的symbol_id
+            local varSymbolId, _ = context.findVariableSymbol(ctx, varName, module)
+            if varSymbolId then
+                return {
+                    type = 'resolved_symbol',
+                    name = varName,
+                    resolved = true,
+                    source = arg,
+                    symbolId = varSymbolId,
+                    description = string.format("已解析变量父类: %s -> %s", varName, varSymbolId)
+                }
+            else
+                -- 如果找不到symbol_id，使用字符串名称
+                return {
+                    type = 'string',
+                    name = varName,
+                    resolved = true,
+                    source = arg,
+                    symbolId = varName, -- 使用字符串名称作为标识
+                    description = string.format("变量父类(未找到符号): %s", varName)
+                }
+            end
         end
     elseif argType == 'call' then
         -- 函数调用返回的父类
         local callName = utils.getCallName(arg)
         if callName then
-            return {
-                type = 'function_call',
-                name = callName,
-                resolved = false,
-                source = arg,
-                needsResolution = true,
-                expression = string.format("%s(...)", callName)
-            }
+            -- 尝试查找函数的symbol_id
+            local funcSymbolId, _ = context.findSymbolByName(ctx, callName, module)
+            if funcSymbolId then
+                return {
+                    type = 'resolved_symbol',
+                    name = callName,
+                    resolved = true,
+                    source = arg,
+                    symbolId = funcSymbolId,
+                    description = string.format("已解析函数调用父类: %s() -> %s", callName, funcSymbolId)
+                }
+            else
+                -- 使用函数名作为字符串标识
+                return {
+                    type = 'string',
+                    name = callName,
+                    resolved = true,
+                    source = arg,
+                    symbolId = callName, -- 使用函数名作为标识
+                    description = string.format("函数调用父类: %s()", callName)
+                }
+            end
         end
     elseif argType == 'binary' then
         -- 二元表达式父类 (如 A or B, A and B)
         local operator = arg.op and arg.op.type
         if operator then
+            local leftName = utils.getNodeName(arg[1]) or "?"
+            local rightName = utils.getNodeName(arg[2]) or "?"
+            local exprName = string.format("%s_%s_%s", leftName, operator, rightName)
             return {
-                type = 'binary_expression',
-                operator = operator,
-                resolved = false,
+                type = 'string',
+                name = exprName,
+                resolved = true,
                 source = arg,
-                needsResolution = true,
-                expression = string.format("(%s %s %s)", 
-                    utils.getNodeName(arg[1]) or "?", 
-                    operator, 
-                    utils.getNodeName(arg[2]) or "?")
+                symbolId = exprName, -- 使用表达式作为标识
+                description = string.format("表达式父类: (%s %s %s)", leftName, operator, rightName)
             }
         end
     elseif argType == 'table' then
         -- 表形式的组件列表（如 {ComponentA, ComponentB}）
         local components = {}
         for i, component in ipairs(arg) do
+            local componentInfo = nil
+            
             if component.type == 'getlocal' or component.type == 'getglobal' then
                 local componentName = utils.getNodeName(component)
                 if componentName then
-                    table.insert(components, componentName)
+                    -- 查找组件的symbol_id
+                    local componentSymbolId, _ = context.findVariableSymbol(ctx, componentName, module)
+                    if componentSymbolId then
+                        componentInfo = {
+                            type = 'resolved_symbol',
+                            name = componentName,
+                            resolved = true,
+                            source = component,
+                            symbolId = componentSymbolId,
+                            description = string.format("已解析组件: %s -> %s", componentName, componentSymbolId)
+                        }
+                    else
+                        -- 使用字符串名称
+                        componentInfo = {
+                            type = 'string',
+                            name = componentName,
+                            resolved = true,
+                            source = component,
+                            symbolId = componentName, -- 使用字符串名称作为标识
+                            description = string.format("组件(未找到符号): %s", componentName)
+                        }
+                    end
                 end
+            elseif component.type == 'string' then
+                -- 字符串形式的组件名
+                local componentName = utils.getStringValue(component)
+                if componentName then
+                    -- 尝试查找对应的符号
+                    local symbolId, _ = context.findSymbolByName(ctx, componentName, module)
+                    if symbolId then
+                        componentInfo = {
+                            type = 'resolved_symbol',
+                            name = componentName,
+                            resolved = true,
+                            source = component,
+                            symbolId = symbolId,
+                            description = string.format("已解析组件字符串: %s -> %s", componentName, symbolId)
+                        }
+                    else
+                        componentInfo = {
+                            type = 'string',
+                            name = componentName,
+                            resolved = true,
+                            source = component,
+                            symbolId = componentName, -- 使用字符串名称作为标识
+                            description = string.format("组件字符串: %s", componentName)
+                        }
+                    end
+                end
+            elseif component.type == 'call' then
+                -- 函数调用返回的组件
+                local callName = utils.getCallName(component)
+                if callName then
+                    -- 尝试查找函数的symbol_id
+                    local funcSymbolId, _ = context.findSymbolByName(ctx, callName, module)
+                    if funcSymbolId then
+                        componentInfo = {
+                            type = 'resolved_symbol',
+                            name = callName,
+                            resolved = true,
+                            source = component,
+                            symbolId = funcSymbolId,
+                            description = string.format("已解析组件函数: %s() -> %s", callName, funcSymbolId)
+                        }
+                    else
+                        componentInfo = {
+                            type = 'string',
+                            name = callName,
+                            resolved = true,
+                            source = component,
+                            symbolId = callName, -- 使用函数名作为标识
+                            description = string.format("组件函数调用: %s()", callName)
+                        }
+                    end
+                end
+            end
+            
+            if componentInfo then
+                table.insert(components, componentInfo)
+                context.debug(ctx, "组件信息: %s (%s) -> %s", 
+                    componentInfo.name or "unknown", 
+                    componentInfo.type, 
+                    componentInfo.symbolId or "nil")
             end
         end
         
@@ -621,10 +747,21 @@ local function parseParentClass(ctx, arg, module)
             return {
                 type = 'component_list',
                 components = components,
-                resolved = false,
+                resolved = true,
                 source = arg,
-                needsResolution = true,
-                expression = string.format("{%s}", table.concat(components, ", "))
+                symbolId = nil, -- 组件列表不需要单独的symbolId
+                description = string.format("组件列表: [%s]", 
+                    table.concat(
+                        (function()
+                            local names = {}
+                            for _, comp in ipairs(components) do
+                                table.insert(names, comp.name or "unknown")
+                            end
+                            return names
+                        end)(), 
+                        ", "
+                    )
+                )
             }
         end
     elseif argType == 'nil' then
@@ -632,14 +769,14 @@ local function parseParentClass(ctx, arg, module)
         return nil
     end
     
-    -- 未知类型，记录原始信息
+    -- 未知类型，使用类型名作为字符串标识
     return {
-        type = 'unknown',
-        argType = argType,
-        resolved = false,
+        type = 'string',
+        name = argType,
+        resolved = true,
         source = arg,
-        needsResolution = true,
-        expression = string.format("<%s>", argType)
+        symbolId = argType, -- 使用类型名作为标识
+        description = string.format("未知类型: <%s>", argType)
     }
 end
 
@@ -691,7 +828,7 @@ function analyzeCallExpression(ctx, uri, module, source)
                         if parentInfo then
                             table.insert(class.parentClasses, parentInfo)
                             context.debug(ctx, "父类关系: %s -> %s (%s)", 
-                                className, parentInfo.name or parentInfo.expression, parentInfo.type)
+                                className, parentInfo.name or parentInfo.description, parentInfo.type)
                         end
                     end
                 end
@@ -995,8 +1132,8 @@ function analyzeReference(ctx, uri, module, sourceSymbol, refNode)
                     
                     -- 在字段符号的refs中记录源符号ID
                     fieldSymbol.refs[sourceSymbol.id] = true
-                    
-                    context.debug(ctx, "字段引用: %s -> %s.%s (字段ID: %s)", 
+                
+                context.debug(ctx, "字段引用: %s -> %s.%s (字段ID: %s)", 
                         sourceSymbol.name, objName, fieldName, fieldSymbol.id)
                 end
             end
@@ -1033,8 +1170,8 @@ function consolidateTypeAliases(ctx)
         aliasCount, movedMethods, movedVariables))
 end
 
--- 收集单个class的所有引用变量（递归处理refs）
-function collectClassReferencingVariables(ctx, classSymbol, visited)
+-- 递归收集CLASS类型符号的所有后继符号
+local function collectClassSuccessors(ctx, classSymbol, visited)
     visited = visited or {}
     
     -- 防止循环引用
@@ -1043,48 +1180,23 @@ function collectClassReferencingVariables(ctx, classSymbol, visited)
     end
     visited[classSymbol.id] = true
     
-    local referencingVariables = {}
+    local successors = {}
     
-    -- 查找所有引用了这个class的变量
-    -- 通过遍历所有符号，找到那些在possibles中包含这个class的变量
-    for id, symbol in pairs(ctx.symbols) do
-        if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.possibles then
-            -- 检查这个变量是否引用了当前class
-            for _, possible in ipairs(symbol.possibles) do
-                if possible == classSymbol.name then
-                    table.insert(referencingVariables, symbol)
-                    context.debug(ctx, "找到引用class的变量: %s -> %s", symbol.name, classSymbol.name)
-                    break
-                end
-            end
-        end
-    end
-    
-    -- 递归处理：如果找到的变量本身也有refs，继续查找引用这些变量的其他变量
-    local originalVariables = {}
-    for _, var in ipairs(referencingVariables) do
-        table.insert(originalVariables, var)
-    end
-    
-    for _, var in ipairs(originalVariables) do
-        if var.refs and next(var.refs) then
-            -- 查找所有引用了这个变量的其他变量
-            for refSymbolId, _ in pairs(var.refs) do
-                local refSymbol = ctx.symbols[refSymbolId]
-                if refSymbol and refSymbol.type == SYMBOL_TYPE.VARIABLE then
-                    -- 检查是否已经在列表中
-                    local alreadyExists = false
-                    for _, existingVar in ipairs(referencingVariables) do
-                        if existingVar.id == refSymbol.id then
-                            alreadyExists = true
-                            break
-                        end
-                    end
-                    
-                    if not alreadyExists then
-                        table.insert(referencingVariables, refSymbol)
-                        context.debug(ctx, "找到间接引用class的变量: %s -> %s -> %s", 
-                            refSymbol.name, var.name, classSymbol.name)
+    -- 如果class有refs，递归查找所有后继
+    if classSymbol.refs and next(classSymbol.refs) then
+        for refSymbolId, _ in pairs(classSymbol.refs) do
+            local refSymbol = ctx.symbols[refSymbolId]
+            if refSymbol then
+                -- 添加当前后继符号
+                table.insert(successors, refSymbol)
+                context.debug(ctx, "找到class %s 的后继符号: %s (类型: %s)", 
+                    classSymbol.name, refSymbol.name, refSymbol.type)
+                
+                -- 如果后继符号也是CLASS类型，递归查找其后继
+                if refSymbol.type == SYMBOL_TYPE.CLASS then
+                    local nestedSuccessors = collectClassSuccessors(ctx, refSymbol, visited)
+                    for _, nestedSymbol in ipairs(nestedSuccessors) do
+                        table.insert(successors, nestedSymbol)
                     end
                 end
             end
@@ -1092,183 +1204,152 @@ function collectClassReferencingVariables(ctx, classSymbol, visited)
     end
     
     visited[classSymbol.id] = nil
-    return referencingVariables
+    return successors
 end
 
--- 处理通过引用关系找到的后继符号
+-- 处理通过CLASS类型refs关系找到的后继符号并进行合并
 function processReferenceBasedAliases(ctx)
     local processedCount = 0
     local movedMethods = 0
     local movedVariables = 0
+    local mergedClasses = 0
     
-    -- 遍历所有模块
-    for moduleName, module in pairs(ctx.modules) do
-        context.debug(ctx, "处理模块 %s 中的class符号", moduleName)
-        
-        -- 查找模块中的所有class类型符号
-        if module.classes and #module.classes > 0 then
-            for _, classId in ipairs(module.classes) do
-                local classSymbol = ctx.symbols[classId]
-                if classSymbol and classSymbol.type == SYMBOL_TYPE.CLASS then
-                    context.debug(ctx, "处理class: %s (ID: %s)", classSymbol.name, classId)
+    -- 遍历所有CLASS类型符号
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.CLASS then
+            context.debug(ctx, "处理CLASS符号: %s (ID: %s)", symbol.name, symbolId)
+            
+            -- 收集所有后继符号（递归）
+            local successors = collectClassSuccessors(ctx, symbol)
+            
+            if #successors > 0 then
+                context.debug(ctx, "CLASS %s 有 %d 个后继符号", symbol.name, #successors)
+                
+                -- 处理每个后继符号，将其定义合并到原始CLASS中
+                for _, successor in ipairs(successors) do
+                    local hasMerged = false
                     
-                    -- 收集所有引用这个class的变量（包括递归refs）
-                    local referencingVariables = collectClassReferencingVariables(ctx, classSymbol)
-                    
-                    if #referencingVariables > 0 then
-                        context.debug(ctx, "class %s 被 %d 个变量引用", classSymbol.name, #referencingVariables)
-                        
-                        -- 处理每个引用变量，检查是否有定义需要移动
-                        for _, varSymbol in ipairs(referencingVariables) do
-                            -- 检查变量是否有定义（methods或variables）
-                            local hasDefinitions = (varSymbol.methods and #varSymbol.methods > 0) or
-                                                 (varSymbol.variables and #varSymbol.variables > 0)
-                            
-                            if hasDefinitions then
-                                -- 移动定义到class
-                                if varSymbol.methods and #varSymbol.methods > 0 then
-                                    for _, methodId in ipairs(varSymbol.methods) do
+                    -- 合并方法定义
+                    if successor.methods and #successor.methods > 0 then
+                        for _, methodId in ipairs(successor.methods) do
                                         local method = ctx.symbols[methodId]
                                         if method then
-                                            table.insert(classSymbol.methods, methodId)
-                                            method.parent = classSymbol
+                                table.insert(symbol.methods, methodId)
+                                method.parent = symbol
                                             movedMethods = movedMethods + 1
+                                hasMerged = true
                                             
-                                            context.debug(ctx, "移动方法: %s.%s -> %s.%s", 
-                                                varSymbol.name, method.name, classSymbol.name, method.name)
+                                context.debug(ctx, "合并方法: %s.%s -> %s.%s", 
+                                    successor.name, method.name, symbol.name, method.name)
                                         end
                                     end
-                                    varSymbol.methods = {}
+                        successor.methods = {}
                                 end
                                 
-                                if varSymbol.variables and #varSymbol.variables > 0 then
-                                    for _, varId in ipairs(varSymbol.variables) do
+                    -- 合并变量定义
+                    if successor.variables and #successor.variables > 0 then
+                        for _, varId in ipairs(successor.variables) do
                                         local var = ctx.symbols[varId]
                                         if var then
-                                            table.insert(classSymbol.variables, varId)
-                                            var.parent = classSymbol
+                                table.insert(symbol.variables, varId)
+                                var.parent = symbol
                                             movedVariables = movedVariables + 1
+                                hasMerged = true
                                             
-                                            context.debug(ctx, "移动变量: %s.%s -> %s.%s", 
-                                                varSymbol.name, var.name, classSymbol.name, var.name)
+                                context.debug(ctx, "合并变量: %s.%s -> %s.%s", 
+                                    successor.name, var.name, symbol.name, var.name)
                                         end
                                     end
-                                    varSymbol.variables = {}
-                                end
-                                
-                                -- 标记变量为别名
-                                varSymbol.isAlias = true
-                                varSymbol.aliasTarget = classSymbol.id
-                                varSymbol.aliasTargetName = classSymbol.name
-                                
-                                processedCount = processedCount + 1
+                        successor.variables = {}
+                    end
+                    
+                    -- 如果后继符号是变量类型，标记为别名
+                    if successor.type == SYMBOL_TYPE.VARIABLE and hasMerged then
+                        successor.isAlias = true
+                        successor.aliasTarget = symbol.id
+                        successor.aliasTargetName = symbol.name
+                        
                                 context.debug(ctx, "标记别名: %s -> %s", 
-                                    varSymbol.name, classSymbol.name)
-                            end
-                        end
+                            successor.name, symbol.name)
+                    end
+                    
+                    -- 如果后继符号是CLASS类型且有定义被合并，标记为已合并
+                    if successor.type == SYMBOL_TYPE.CLASS and hasMerged then
+                        mergedClasses = mergedClasses + 1
+                        context.debug(ctx, "合并CLASS: %s -> %s", 
+                            successor.name, symbol.name)
+                    end
+                    
+                    if hasMerged then
+                        processedCount = processedCount + 1
                     end
                 end
             end
         end
     end
     
-    context.debug(ctx, "处理了 %d 个class别名，移动了 %d 个方法和 %d 个变量", 
-        processedCount, movedMethods, movedVariables)
+    context.debug(ctx, "处理了 %d 个符号，移动了 %d 个方法和 %d 个变量，合并了 %d 个CLASS", 
+        processedCount, movedMethods, movedVariables, mergedClasses)
     
     return processedCount, movedMethods, movedVariables
 end
 
--- 解析父类关系，将变量引用、函数调用等解析为实际的类名
+-- 简化父类关系，只保存SYMBOL_ID或name字符串
 local function resolveParentClassRelations(ctx)
-    local resolvedCount = 0
-    local unresolvedCount = 0
+    local processedCount = 0
+    local mixinCount = 0
     
-    -- 遍历所有类，解析其父类关系
+    -- 遍历所有类，简化其父类关系数据结构
     for className, classSymbol in pairs(ctx.classes) do
         if classSymbol.parentClasses and #classSymbol.parentClasses > 0 then
-            context.debug(ctx, "解析类 %s 的父类关系", className)
+            context.debug(ctx, "简化类 %s 的父类关系", className)
+            
+            local simplifiedParents = {}
+            local mixins = {}
+            local seenParents = {}  -- 用于去重
+            local seenMixins = {}   -- 用于去重
             
             for i, parentInfo in ipairs(classSymbol.parentClasses) do
-                if not parentInfo.resolved and parentInfo.needsResolution then
-                    local resolvedName = nil
-                    
-                    if parentInfo.type == 'variable' then
-                        -- 变量引用父类：查找变量的实际值
-                        local varId, varSymbol = context.findSymbol(ctx, function(symbol)
-                            return symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == parentInfo.name
-                        end)
-                        
-                        if varSymbol and varSymbol.possibles and #varSymbol.possibles > 0 then
-                            -- 取第一个可能的类型作为父类
-                            resolvedName = varSymbol.possibles[1]
-                            context.debug(ctx, "  变量引用父类解析: %s -> %s", parentInfo.name, resolvedName)
+                if parentInfo.type == 'component_list' then
+                    -- 组件列表：提取每个组件的symbolId或name
+                    for _, componentInfo in ipairs(parentInfo.components) do
+                        local componentId = componentInfo.symbolId or componentInfo.name
+                        if componentId and not seenMixins[componentId] then
+                            seenMixins[componentId] = true
+                            table.insert(mixins, componentId)
+                            context.debug(ctx, "  添加混入组件: %s -> %s", className, componentId)
+                            mixinCount = mixinCount + 1
                         end
-                        
-                    elseif parentInfo.type == 'function_call' then
-                        -- 函数调用父类：简化处理，假设返回与函数名相关的类
-                        if parentInfo.name == 'getBaseClass' then
-                            resolvedName = 'LocalEntityBase'  -- 示例解析
-                            context.debug(ctx, "  函数调用父类解析: %s -> %s", parentInfo.name, resolvedName)
-                        end
-                        
-                    elseif parentInfo.type == 'binary_expression' then
-                        -- 二元表达式父类：简化处理，取第一个操作数
-                        if parentInfo.operator == 'or' or parentInfo.operator == 'and' then
-                            local leftOperand = parentInfo.source[1]
-                            if leftOperand and (leftOperand.type == 'getlocal' or leftOperand.type == 'getglobal') then
-                                local leftName = utils.getNodeName(leftOperand)
-                                if leftName then
-                                    resolvedName = leftName
-                                    context.debug(ctx, "  表达式父类解析: %s -> %s", parentInfo.expression, resolvedName)
-                                end
-                            end
-                        end
-                        
-                    elseif parentInfo.type == 'component_list' then
-                        -- 组件列表：记录所有组件作为混入
-                        classSymbol.mixins = classSymbol.mixins or {}
-                        for _, componentName in ipairs(parentInfo.components) do
-                            table.insert(classSymbol.mixins, componentName)
-                            context.debug(ctx, "  添加混入组件: %s -> %s", className, componentName)
-                        end
-                        resolvedName = 'component_list'  -- 标记为已处理
                     end
-                    
-                    if resolvedName then
-                        -- 更新父类信息
-                        parentInfo.resolved = true
-                        parentInfo.resolvedName = resolvedName
-                        parentInfo.needsResolution = false
-                        resolvedCount = resolvedCount + 1
-                        
-                        context.debug(ctx, "  ✅ 父类解析成功: %s (%s) -> %s", 
-                            parentInfo.name or parentInfo.expression, parentInfo.type, resolvedName)
-                    else
-                        unresolvedCount = unresolvedCount + 1
-                        context.debug(ctx, "  ❌ 父类解析失败: %s (%s)", 
-                            parentInfo.name or parentInfo.expression, parentInfo.type)
+                else
+                    -- 单个父类：只保存symbolId或name
+                    local parentId = parentInfo.symbolId or parentInfo.name
+                    if parentId and not seenParents[parentId] then
+                        seenParents[parentId] = true
+                        table.insert(simplifiedParents, parentId)
+                        context.debug(ctx, "  添加父类: %s -> %s", className, parentId)
                     end
-                elseif parentInfo.resolved then
-                    resolvedCount = resolvedCount + 1
                 end
+                processedCount = processedCount + 1
+            end
+            
+            -- 更新类的父类信息，只保存简化的数据
+            classSymbol.parentClasses = simplifiedParents
+            if #mixins > 0 then
+                classSymbol.mixins = mixins
             end
         end
     end
     
-    context.debug(ctx, "父类关系解析完成：已解析 %d 个，未解析 %d 个", resolvedCount, unresolvedCount)
-    print(string.format("    父类关系解析：已解析 %d 个，未解析 %d 个", resolvedCount, unresolvedCount))
+    context.debug(ctx, "父类关系简化完成：处理 %d 个父类，%d 个混入组件", processedCount, mixinCount)
+    print(string.format("    父类关系简化：处理 %d 个父类，%d 个混入组件", processedCount, mixinCount))
     
-    -- 输出解析结果统计
-    if resolvedCount > 0 then
-        print("    解析的父类关系:")
+    -- 输出简化后的父类关系
+    if processedCount > 0 then
+        print("    简化后的父类关系:")
         for className, classSymbol in pairs(ctx.classes) do
             if classSymbol.parentClasses and #classSymbol.parentClasses > 0 then
-                for _, parentInfo in ipairs(classSymbol.parentClasses) do
-                    if parentInfo.resolved then
-                        local displayName = parentInfo.resolvedName or parentInfo.name
-                        print(string.format("      %s -> %s (%s)", className, displayName, parentInfo.type))
-                    end
-                end
+                print(string.format("      %s -> %s", className, table.concat(classSymbol.parentClasses, ", ")))
             end
             
             -- 输出混入组件
@@ -1278,7 +1359,7 @@ local function resolveParentClassRelations(ctx)
         end
     end
     
-    return resolvedCount, unresolvedCount
+    return processedCount, mixinCount
 end
 
 -- 主分析函数 - 三遍处理
@@ -1356,8 +1437,8 @@ function phase1.analyze(ctx)
         end
     end
     
-    -- 第三遍：解析父类关系
-    print("  🔄 第三遍：解析父类关系...")
+    -- 第三遍：简化父类关系
+    print("  🔄 第三遍：简化父类关系...")
     resolveParentClassRelations(ctx)
     
     -- 第四遍：整理类型别名，移动定义到真正的类型上
