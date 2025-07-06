@@ -88,6 +88,8 @@ function context.new(rootUri, options)
             },
             -- 目录过滤模式（支持通配符）
             excludePatterns = {
+                "\\Data\\",
+                "/Data/"
             },
             debugMode = options and options.debug or false,
             -- 节点处理跟踪（用于调试重复处理问题）
@@ -305,7 +307,7 @@ function context.addReference(ctx, name, ast, parent)
     a.parent = parent
     -- 将找到的module-id进行处理
     a.target = targetModule.id
-    parent:addReference(a)
+    parent:addImport(a)
     context.addSymbol(ctx, a)
     ctx.asts[ast] = a
     return a

@@ -63,8 +63,12 @@ local module = {}
 function module.new(sym_id, name, ast)
     local mdl = scope.new(sym_id, name, SYMBOL_TYPE.MODULE, ast)
     mdl.returns = nil  -- 该模块的导出'返回类型'列表，这里记录的是一个'symbol_id'
+    mdl.imports = {}  -- 该模块的导入列表，这里记录的是一个'symbol_id'
     applyMethods(mdl, module)
     return mdl
+end
+function module:addImport(import)
+    table.insert(self.imports, import.id)
 end
 
 -- class：一个类型定义，包含属性和函数成员
