@@ -23,6 +23,7 @@ function context.new(rootUri, options)
             classes = {},           -- 类定义 {classId -> {name, module, members, ...}}
             functions = {},         -- 函数定义 {funcId -> {name, scope, params, ...}}
             variables = {},         -- 变量定义 {varId -> {name, scope, type, ...}}
+            members = {},           -- 成员变量定义 {memberId -> {name, ownerObject, memberType, ...}}
             aliases = {},           -- 别名映射 {aliasName -> targetId}
         },
         
@@ -105,6 +106,12 @@ function context.getFiles(ctx)
             local pathString = fullpath:string()
             local st = status:type()
             
+            -- 检查是否是Config目录（忽略大小写）
+            local fileName = fullpath:filename():string()
+            if fileName:lower() == 'config' then
+                goto continue
+            end
+            
             if st == 'directory' or st == 'symlink' or st == 'junction' then
                 -- 递归扫描子目录
                 scanDirectory(pathString)
@@ -119,6 +126,8 @@ function context.getFiles(ctx)
                     end
                 end
             end
+            
+            ::continue::
         end
     end
     
@@ -143,7 +152,8 @@ function context.addSymbol(ctx, symbolType, symbolData)
         module = "modules",
         class = "classes", 
         ["function"] = "functions",
-        variable = "variables"
+        variable = "variables",
+        member = "members"
     }
     
     local tableName = symbolTableNames[symbolType] or (symbolType .. 's')
@@ -167,7 +177,8 @@ function context.findSymbol(ctx, symbolType, predicate)
         module = "modules",
         class = "classes", 
         ["function"] = "functions",
-        variable = "variables"
+        variable = "variables",
+        member = "members"
     }
     
     local tableName = symbolTableNames[symbolType] or (symbolType .. 's')

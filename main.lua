@@ -5,14 +5,19 @@ local version = require 'version'
 require 'config.env'
 
 local function getValue(value)
-    if     value == 'true' or value == nil then
+    if value == 'true' then
         value = true
     elseif value == 'false' then
         value = false
+    elseif value == nil then
+        value = true
     elseif tonumber(value) then
         value = tonumber(value)
     elseif value:sub(1, 1) == '"' and value:sub(-1, -1) == '"' then
         value = value:sub(2, -2)
+    else
+        -- 保持原始字符串值
+        value = value
     end
     return value
 end
@@ -22,7 +27,7 @@ local function loadArgs()
     local lastKey
     for _, v in ipairs(arg) do
         ---@type string?
-        local key, tail = v:match '^%-%-([%w_]+)(.*)$'
+        local key, tail = v:match '^%-%-([%w%-]+)(.*)$'
         local value
         if key then
             value   = tail:match '=(.+)'
@@ -38,7 +43,9 @@ local function loadArgs()
             end
         end
         if key then
-            _G[key:upper():gsub('-', '_')] = getValue(value)
+            local globalKey = key:upper():gsub('-', '_')
+            local finalValue = getValue(value)
+            _G[globalKey] = finalValue
         end
     end
 end

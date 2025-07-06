@@ -65,7 +65,7 @@ function export.runCLI()
         
         -- 创建分析选项
         local options = {
-            debug = ANALYZE_DEBUG == "true" or ANALYZE_DEBUG == "1"
+            debug = ANALYZE_DEBUG == true or ANALYZE_DEBUG == "true" or ANALYZE_DEBUG == "1"
         }
         
         -- 运行分析

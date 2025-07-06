@@ -164,7 +164,7 @@ local function getFunctionSourceCode(uri, funcSymbol)
         -- 确保位置有效
         if startOffset and finishOffset and startOffset > 0 and finishOffset > startOffset and finishOffset <= #text then
             local sourceCode = text:sub(startOffset, finishOffset)
-            return sourceCode, startOffset - 1, finishOffset - 1 -- 转换为0基索引
+            return sourceCode, startOffset, finishOffset -- 使用正确的offset值
         end
     end
     

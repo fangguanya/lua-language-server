@@ -39,17 +39,17 @@ function GM.CreateNewGame()
 end
 
 -- 模拟战斗
-function GM.SimulateBattle(player1, player2, weapon1, weapon2)
+function GM.SimulateBattle(obj1, obj2, obj3, obj4)
     print("\n=== Battle Simulation ===")
     
     -- 使用武器进行攻击
-    if weapon1 and not weapon1:IsBroken() then
-        local damage1 = weapon1:Use()
+    if obj3 and not obj3:IsBroken() then
+        local damage1 = obj3:Use()
         obj2:TakeDamage(damage1)
     end
     
-    if weapon2 and not weapon2:IsBroken() then
-        local damage2 = weapon2:Use()
+    if obj4 and not obj4:IsBroken() then
+        local damage2 = obj4:Use()
         obj1:TakeDamage(damage2)
     end
     

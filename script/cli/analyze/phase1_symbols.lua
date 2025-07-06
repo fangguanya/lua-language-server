@@ -63,6 +63,12 @@ function analyzeSymbolDefinition(ctx, uri, moduleId, source)
     elseif sourceType == 'local' then
         -- 处理local节点（包含变量定义）
         analyzeLocalStatement(ctx, uri, moduleId, source)
+    elseif sourceType == 'setfield' then
+        -- 处理成员变量定义 (obj.field = value)
+        analyzeMemberVariableDefinition(ctx, uri, moduleId, source)
+    elseif sourceType == 'setindex' then
+        -- 处理索引成员变量定义 (obj[key] = value)
+        analyzeMemberVariableDefinition(ctx, uri, moduleId, source)
     end
 end
 
@@ -342,14 +348,44 @@ function analyzeFunctionDefinition(ctx, uri, moduleId, source)
     
     -- 如果是类方法或静态函数，添加到类中
     if className then
+        local targetClassSymbol = nil
+        local targetClassName = nil
+        
+        -- 方法1：通过别名查找
         local alias = ctx.symbols.aliases[className]
         if alias and alias.type == 'class_definition' then
-            local classSymbol = ctx.symbols.classes[alias.symbolId]
-            if classSymbol then
-                table.insert(classSymbol.methods, funcId)
-                context.debug(ctx, "方法关联: %s -> %s (%s)", 
-                    funcName, classSymbol.name, isMethod and "方法" or "静态函数")
+            targetClassSymbol = ctx.symbols.classes[alias.symbolId]
+            targetClassName = alias.targetClass
+        end
+        
+        -- 方法2：直接通过类名查找
+        if not targetClassSymbol then
+            for classId, classSymbol in pairs(ctx.symbols.classes) do
+                if classSymbol.name == className then
+                    targetClassSymbol = classSymbol
+                    targetClassName = className
+                    break
+                end
             end
+        end
+        
+        -- 方法3：反向查找别名（处理多层别名的情况）
+        if not targetClassSymbol then
+            for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+                if aliasInfo.type == 'class_definition' and aliasInfo.targetClass == className then
+                    targetClassSymbol = ctx.symbols.classes[aliasInfo.symbolId]
+                    targetClassName = className
+                    break
+                end
+            end
+        end
+        
+        if targetClassSymbol then
+            table.insert(targetClassSymbol.methods, funcId)
+            context.debug(ctx, "方法关联: %s -> %s (%s)", 
+                funcName, targetClassName, isMethod and "方法" or "静态函数")
+        else
+            context.debug(ctx, "⚠️  未找到类定义: %s (函数: %s)", className, funcName)
         end
     end
     
@@ -440,6 +476,139 @@ function analyzeLocalStatement(ctx, uri, moduleId, source)
             ::continue::
         end
     end
+end
+
+-- 分析成员变量定义
+function analyzeMemberVariableDefinition(ctx, uri, moduleId, source)
+    local objName = nil
+    local memberName = nil
+    local position = utils.getNodePosition(source)
+    
+    -- 获取对象名和成员名
+    if source.type == 'setfield' then
+        -- obj.field = value
+        objName = utils.getNodeName(source.node)
+        memberName = utils.getNodeName(source.field)
+    elseif source.type == 'setindex' then
+        -- obj[key] = value
+        objName = utils.getNodeName(source.node)
+        if source.index and source.index.type == 'string' then
+            memberName = utils.getStringValue(source.index)
+        end
+    end
+    
+    if not objName or not memberName then
+        return
+    end
+    
+    -- 确定成员变量的类型
+    local memberType = 'unknown'
+    local valueType = 'unknown'
+    
+    if source.value then
+        valueType = source.value.type
+        
+        -- 基础类型推断
+        if valueType == 'string' then
+            memberType = 'string'
+        elseif valueType == 'number' or valueType == 'integer' then
+            memberType = 'number'
+        elseif valueType == 'boolean' then
+            memberType = 'boolean'
+        elseif valueType == 'table' then
+            memberType = 'table'
+        elseif valueType == 'call' then
+            -- 如果是函数调用，尝试推断类型
+            local callName = utils.getCallName(source.value)
+            if callName then
+                if callName:find(':new') or callName:find('%.new') then
+                    -- 构造函数调用
+                    local className = callName:match('([^:.]+)[:.][nN]ew')
+                    if className then
+                        memberType = className
+                    end
+                else
+                    memberType = 'function_result'
+                end
+            end
+        elseif valueType == 'getlocal' or valueType == 'getglobal' then
+            -- 变量引用
+            local varName = utils.getNodeName(source.value)
+            if varName then
+                memberType = 'reference:' .. varName
+            end
+        end
+    end
+    
+    -- 创建成员变量符号
+    local memberId = context.addSymbol(ctx, 'member', {
+        name = memberName,
+        module = moduleId,
+        uri = uri,
+        position = position,
+        ownerObject = objName,
+        memberType = memberType,
+        valueType = valueType,
+        isField = source.type == 'setfield',
+        isIndex = source.type == 'setindex'
+    })
+    
+    -- 尝试将成员变量添加到对应的类中
+    local targetClass = nil
+    
+    -- 检查objName是否是已知的类别名
+    local alias = ctx.symbols.aliases[objName]
+    if alias and alias.type == 'class_definition' then
+        targetClass = alias.targetClass
+    elseif objName == 'self' then
+        -- 如果是self，需要从当前上下文推断类名
+        targetClass = findCurrentClassName(ctx, source)
+    else
+        -- 直接使用objName作为类名
+        targetClass = objName
+    end
+    
+    if targetClass then
+        -- 查找对应的类符号
+        for classId, classSymbol in pairs(ctx.symbols.classes) do
+            if classSymbol.name == targetClass then
+                table.insert(classSymbol.members, memberId)
+                context.debug(ctx, "成员变量: %s.%s -> %s (类: %s)", 
+                    objName, memberName, memberType, targetClass)
+                break
+            end
+        end
+    end
+    
+    context.debug(ctx, "成员变量定义: %s.%s = %s (类型: %s)", 
+        objName, memberName, valueType, memberType)
+end
+
+-- 查找当前类名（用于self引用）
+function findCurrentClassName(ctx, source)
+    -- 向上查找，寻找包含当前代码的函数定义
+    local current = source
+    while current and current.parent do
+        current = current.parent
+        if current.type == 'function' then
+            local funcParent = current.parent
+            if funcParent and funcParent.type == 'setmethod' then
+                -- 这是一个方法定义
+                local className = utils.getNodeName(funcParent.node)
+                if className then
+                    -- 检查是否是别名
+                    local alias = ctx.symbols.aliases[className]
+                    if alias and alias.type == 'class_definition' then
+                        return alias.targetClass
+                    else
+                        return className
+                    end
+                end
+            end
+            break
+        end
+    end
+    return nil
 end
 
 -- 主分析函数
