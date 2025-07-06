@@ -29,8 +29,7 @@ function base.new(sym_id, name, type, ast)
     b.id = sym_id
     b.name = name
     b.type = type
-    b.references = {}  -- 反向引用：其他符号对此符号的引用
-    b.refs = {}        -- 正向引用：此符号对其他符号的引用（来自AST的refs字段）
+    b.refs = {}        -- 正向引用：此符号对其他符号的引用（只存储SYMBOL_ID）
     b.container = false
     b.parent = nil  -- 对于module，这个变量固定为nil
     b.ast = ast     -- 缓存的模块ast句柄，省去每次重新构建
@@ -63,19 +62,11 @@ end
 local module = {}
 function module.new(sym_id, name, ast)
     local mdl = scope.new(sym_id, name, SYMBOL_TYPE.MODULE, ast)
-    mdl.returns = nil  -- 该模块的导出‘返回类型’列表，这里记录的是一个‘symbol_id'
-    mdl.references = {} -- 记录的也是一个symbol_id
+    mdl.returns = nil  -- 该模块的导出'返回类型'列表，这里记录的是一个'symbol_id'
     applyMethods(mdl, module)
     return mdl
 end
-function module:addReference(mdl_id)
-    for _,v in self.references do
-        if v == mdl_id then
-            return
-        end
-    end
-    table.insert(self.references, mdl_id)
-end
+
 -- class：一个类型定义，包含属性和函数成员
 local class = {}
 function class.new(sym_id, name, ast)

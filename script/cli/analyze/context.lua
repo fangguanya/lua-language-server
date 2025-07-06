@@ -420,8 +420,6 @@ local function deepClean(obj, visited)
                 end
             end
         end
-        
-        visited[obj] = nil
         return cleaned
     end
     
@@ -436,17 +434,27 @@ end
 -- 创建可序列化的符号数据（移除函数引用）
 function context.getSerializableSymbols(ctx)
     local serializableSymbols = {}
+    local reservedAst = {}
+    for _, symbol in pairs(ctx.symbols) do
+        reservedAst[symbol] = symbol.ast
+        symbol.ast = nil
+    end
     
     for id, symbol in pairs(ctx.symbols) do
-        local cleanSymbol = deepClean(symbol)
-        
-        -- 移除AST引用（通常包含函数）
-        if cleanSymbol then
-            cleanSymbol.ast = nil
-            serializableSymbols[id] = cleanSymbol
+        local cleanSymbol = serializableSymbols[id]
+        if cleanSymbol == nil then
+            cleanSymbol = deepClean(symbol)
+            
+            -- 移除AST引用（通常包含函数）
+            if cleanSymbol then
+                serializableSymbols[id] = cleanSymbol
+            end
         end
     end
     
+    for symbol, ast  in pairs(reservedAst) do
+        symbol.ast = ast
+    end
     return serializableSymbols
 end
 
