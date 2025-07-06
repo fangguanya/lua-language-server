@@ -387,9 +387,11 @@ local function analyzeFunctionCallForParameterInference(ctx, uri, moduleId, call
     -- 分析每个参数
     for i, arg in ipairs(callSource.args) do
         local argType, confidence = inferTypeFromValue(ctx, arg)
+        context.debug(ctx, "  参数[%d]: %s (置信度: %.1f)", i, argType or "nil", confidence or 0.0)
         
         if argType and funcSymbol.params and funcSymbol.params[i] then
             local paramName = funcSymbol.params[i].name
+            context.debug(ctx, "  匹配参数: %s -> %s", paramName, argType)
             
             -- 创建参数类型推断记录
             local paramId = string.format("%s_param_%d", funcSymbol.name, i)
@@ -415,6 +417,14 @@ local function analyzeFunctionCallForParameterInference(ctx, uri, moduleId, call
             }
             
             context.debug(ctx, "✅ 函数参数类型推断: %s.%s -> %s (%.1f)", funcSymbol.name, paramName, argType, confidence)
+        else
+            if not argType then
+                context.debug(ctx, "  ❌ 无法推断参数[%d]类型", i)
+            elseif not funcSymbol.params then
+                context.debug(ctx, "  ❌ 函数没有参数定义")
+            elseif not funcSymbol.params[i] then
+                context.debug(ctx, "  ❌ 函数参数[%d]不存在", i)
+            end
         end
     end
 end

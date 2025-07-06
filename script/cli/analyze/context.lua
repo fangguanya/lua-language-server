@@ -65,6 +65,29 @@ function context.new(rootUri, options)
                 "DefineBriefEntity", "DefineLocalEntity", 
                 "DefineComponent", "DefineSingletonClass"
             },
+            -- 目录过滤配置（支持多个目录和模式）
+            excludeDirectories = {
+                "Config",           -- 配置目录
+                "config",           -- 小写配置目录
+                "Data/Config",      -- 数据配置目录
+                "Data\\Config",     -- Windows路径分隔符
+                "Assets/Config",    -- 资源配置目录
+                "Assets\\Config",   -- Windows路径分隔符
+                "Temp",             -- 临时目录
+                "temp",             -- 小写临时目录
+                ".git",             -- Git目录
+                ".svn",             -- SVN目录
+                ".vscode",          -- VSCode目录
+                "node_modules"      -- Node.js模块目录
+            },
+            -- 目录过滤模式（支持通配符）
+            excludePatterns = {
+                ".*[/\\\\][Cc]onfig$",         -- 任何以Config结尾的目录
+                ".*[/\\\\][Dd]ata[/\\\\][Cc]onfig$", -- Data/Config目录
+                ".*[/\\\\][Aa]ssets[/\\\\][Cc]onfig$", -- Assets/Config目录
+                ".*[/\\\\][Tt]emp$",           -- 任何以Temp结尾的目录
+                ".*[/\\\\]%..*$"               -- 任何以.开头的隐藏目录
+            },
             debugMode = options and options.debug or false
         }
     }
@@ -106,13 +129,16 @@ function context.getFiles(ctx)
             local pathString = fullpath:string()
             local st = status:type()
             
-            -- 检查是否是Config目录（忽略大小写）
-            local fileName = fullpath:filename():string()
-            if fileName:lower() == 'config' then
-                goto continue
-            end
-            
             if st == 'directory' or st == 'symlink' or st == 'junction' then
+                -- 检查是否应该过滤此目录
+                local shouldExclude, reason = context.shouldExcludeDirectory(ctx, pathString)
+                if shouldExclude then
+                    if ctx.config.debugMode then
+                        print(string.format("🐛 跳过目录: %s (%s)", pathString, reason))
+                    end
+                    goto continue
+                end
+                
                 -- 递归扫描子目录
                 scanDirectory(pathString)
             elseif st == 'file' or st == 'regular' then
@@ -140,6 +166,34 @@ function context.debug(ctx, message, ...)
     if ctx.config.debugMode then
         print(string.format("🐛 " .. message, ...))
     end
+end
+
+-- 检查目录是否应该被过滤
+function context.shouldExcludeDirectory(ctx, dirPath)
+    local dirName = dirPath:match("([^/\\]+)$") or dirPath
+    local normalizedPath = dirPath:gsub("\\", "/")
+    
+    -- 检查精确匹配
+    for _, excludeDir in ipairs(ctx.config.excludeDirectories) do
+        if dirName == excludeDir then
+            return true, "精确匹配: " .. excludeDir
+        end
+        
+        -- 检查路径结尾匹配
+        local normalizedExclude = excludeDir:gsub("\\", "/")
+        if normalizedPath:find(normalizedExclude .. "$") then
+            return true, "路径匹配: " .. excludeDir
+        end
+    end
+    
+    -- 检查模式匹配
+    for _, pattern in ipairs(ctx.config.excludePatterns) do
+        if normalizedPath:match(pattern) then
+            return true, "模式匹配: " .. pattern
+        end
+    end
+    
+    return false, nil
 end
 
 -- 添加符号
@@ -218,6 +272,176 @@ function context.addRelation(ctx, relationType, fromId, toId, metadata)
     table.insert(ctx.relations, relation)
     ctx.statistics.totalRelations = ctx.statistics.totalRelations + 1
     return id
+end
+
+-- =======================================
+-- 符号操作封装函数
+-- =======================================
+
+-- 递归解析别名，找到真正的类型
+function context.resolveAlias(ctx, aliasName, visited)
+    visited = visited or {}
+    
+    -- 防止循环引用
+    if visited[aliasName] then
+        context.debug(ctx, "⚠️  检测到循环别名引用: %s", aliasName)
+        return nil, nil
+    end
+    visited[aliasName] = true
+    
+    local alias = ctx.symbols.aliases[aliasName]
+    if not alias then
+        return nil, nil
+    end
+    
+    -- 如果是类定义别名，直接返回
+    if alias.type == 'class_definition' then
+        return alias.symbolId, alias.targetClass
+    end
+    
+    -- 如果是模块导入别名，需要进一步查找
+    if alias.type == 'module_import' then
+        local targetModule = alias.targetModule
+        if targetModule then
+            -- 递归查找模块对应的类
+            return context.resolveAlias(ctx, targetModule, visited)
+        end
+    end
+    
+    -- 如果是变量别名，查找变量指向的类型
+    if alias.type == 'variable_alias' then
+        local targetName = alias.targetName
+        if targetName then
+            return context.resolveAlias(ctx, targetName, visited)
+        end
+    end
+    
+    return nil, nil
+end
+
+-- 查找全局类定义（支持多模块）
+function context.findGlobalClass(ctx, className)
+    -- 方法1：直接通过类名查找
+    for classId, classSymbol in pairs(ctx.symbols.classes) do
+        if classSymbol.name == className then
+            return classId, classSymbol
+        end
+    end
+    
+    -- 方法2：通过别名查找
+    local classId, resolvedClassName = context.resolveAlias(ctx, className)
+    if classId then
+        return classId, ctx.symbols.classes[classId]
+    end
+    
+    -- 方法3：反向查找别名（处理多层别名的情况）
+    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+        if aliasInfo.type == 'class_definition' and aliasInfo.targetClass == className then
+            return aliasInfo.symbolId, ctx.symbols.classes[aliasInfo.symbolId]
+        end
+    end
+    
+    return nil, nil
+end
+
+-- 查找类的所有别名
+function context.findClassAliases(ctx, className)
+    local aliases = {}
+    
+    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+        if aliasInfo.type == 'class_definition' and aliasInfo.targetClass == className then
+            table.insert(aliases, {
+                name = aliasName,
+                symbolId = aliasInfo.symbolId,
+                info = aliasInfo
+            })
+        end
+    end
+    
+    return aliases
+end
+
+-- 合并同类型的别名（解决TmpResult和WeaponClass都指向Weapon的问题）
+function context.mergeClassAliases(ctx, className)
+    local aliases = context.findClassAliases(ctx, className)
+    if #aliases <= 1 then
+        return -- 没有需要合并的别名
+    end
+    
+    -- 找到主要的类定义
+    local mainClassId, mainClassSymbol = context.findGlobalClass(ctx, className)
+    if not mainClassId or not mainClassSymbol then
+        context.debug(ctx, "⚠️  未找到主要类定义: %s", className)
+        return
+    end
+    
+    context.debug(ctx, "🔄 合并类别名: %s (%d个别名)", className, #aliases)
+    
+    -- 合并所有别名的成员和方法到主类中
+    for _, alias in ipairs(aliases) do
+        if alias.symbolId ~= mainClassId then
+            local aliasClassSymbol = ctx.symbols.classes[alias.symbolId]
+            if aliasClassSymbol then
+                -- 合并成员
+                for _, memberId in ipairs(aliasClassSymbol.members or {}) do
+                    if not context.containsValue(mainClassSymbol.members, memberId) then
+                        table.insert(mainClassSymbol.members, memberId)
+                    end
+                end
+                
+                -- 合并方法
+                for _, methodId in ipairs(aliasClassSymbol.methods or {}) do
+                    if not context.containsValue(mainClassSymbol.methods, methodId) then
+                        table.insert(mainClassSymbol.methods, methodId)
+                    end
+                end
+                
+                context.debug(ctx, "  ✅ 合并别名 %s -> %s", alias.name, className)
+            end
+        end
+    end
+    
+    -- 更新所有别名指向主类
+    for _, alias in ipairs(aliases) do
+        ctx.symbols.aliases[alias.name] = {
+            type = 'class_definition',
+            targetClass = className,
+            symbolId = mainClassId
+        }
+    end
+end
+
+-- 检查数组是否包含某个值
+function context.containsValue(array, value)
+    for _, v in ipairs(array) do
+        if v == value then
+            return true
+        end
+    end
+    return false
+end
+
+-- 获取类的完整信息（包括所有别名的成员和方法）
+function context.getCompleteClassInfo(ctx, className)
+    local classId, classSymbol = context.findGlobalClass(ctx, className)
+    if not classId then
+        return nil
+    end
+    
+    -- 合并别名信息
+    context.mergeClassAliases(ctx, className)
+    
+    -- 返回更新后的类信息
+    return classId, ctx.symbols.classes[classId]
+end
+
+-- 添加变量别名
+function context.addVariableAlias(ctx, aliasName, targetName)
+    ctx.symbols.aliases[aliasName] = {
+        type = 'variable_alias',
+        targetName = targetName
+    }
+    context.debug(ctx, "变量别名: %s -> %s", aliasName, targetName)
 end
 
 return context 

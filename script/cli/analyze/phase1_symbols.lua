@@ -306,6 +306,18 @@ function analyzeFunctionDefinition(ctx, uri, moduleId, source)
             if varName then
                 funcName = varName
             end
+        elseif parent.type == 'local' then
+            -- 处理 local funcName = function(...) 的情况
+            local varName = parent[1]  -- local节点的变量名在[1]中
+            if varName then
+                funcName = varName
+            end
+        elseif parent.type == 'setglobal' then
+            -- 处理全局函数声明 function globalFunc(...)
+            local varName = utils.getNodeName(parent.node)
+            if varName then
+                funcName = varName
+            end
         end
     end
     
@@ -314,13 +326,25 @@ function analyzeFunctionDefinition(ctx, uri, moduleId, source)
     
     -- 分析参数
     local params = {}
+    
+    -- 如果是方法定义（使用冒号），自动添加self参数
+    if isMethod then
+        table.insert(params, {
+            name = "self",
+            index = 0,  -- self参数的索引为0，表示隐式参数
+            position = position,
+            isImplicitSelf = true,
+            className = className  -- 记录self的类型
+        })
+    end
+    
     if source.args then
         for i, arg in ipairs(source.args) do
             local paramName = utils.getNodeName(arg)
             if paramName then
                 table.insert(params, {
                     name = paramName,
-                    index = i,
+                    index = isMethod and i or i,  -- 方法的参数索引需要考虑self
                     position = utils.getNodePosition(arg)
                 })
             end
@@ -348,42 +372,12 @@ function analyzeFunctionDefinition(ctx, uri, moduleId, source)
     
     -- 如果是类方法或静态函数，添加到类中
     if className then
-        local targetClassSymbol = nil
-        local targetClassName = nil
-        
-        -- 方法1：通过别名查找
-        local alias = ctx.symbols.aliases[className]
-        if alias and alias.type == 'class_definition' then
-            targetClassSymbol = ctx.symbols.classes[alias.symbolId]
-            targetClassName = alias.targetClass
-        end
-        
-        -- 方法2：直接通过类名查找
-        if not targetClassSymbol then
-            for classId, classSymbol in pairs(ctx.symbols.classes) do
-                if classSymbol.name == className then
-                    targetClassSymbol = classSymbol
-                    targetClassName = className
-                    break
-                end
-            end
-        end
-        
-        -- 方法3：反向查找别名（处理多层别名的情况）
-        if not targetClassSymbol then
-            for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-                if aliasInfo.type == 'class_definition' and aliasInfo.targetClass == className then
-                    targetClassSymbol = ctx.symbols.classes[aliasInfo.symbolId]
-                    targetClassName = className
-                    break
-                end
-            end
-        end
+        local targetClassId, targetClassSymbol = context.findGlobalClass(ctx, className)
         
         if targetClassSymbol then
             table.insert(targetClassSymbol.methods, funcId)
             context.debug(ctx, "方法关联: %s -> %s (%s)", 
-                funcName, targetClassName, isMethod and "方法" or "静态函数")
+                funcName, targetClassSymbol.name, isMethod and "方法" or "静态函数")
         else
             context.debug(ctx, "⚠️  未找到类定义: %s (函数: %s)", className, funcName)
         end
@@ -451,6 +445,17 @@ function analyzeLocalStatement(ctx, uri, moduleId, source)
                         }, varName, position)
                         goto continue
                     end
+                end
+            end
+            
+            -- 检查是否是变量别名 (local A = B)
+            if value and (value.type == 'getlocal' or value.type == 'getglobal') then
+                local targetVarName = utils.getNodeName(value)
+                if targetVarName then
+                    -- 这是一个变量别名，先记录下来
+                    context.addVariableAlias(ctx, varName, targetVarName)
+                    context.debug(ctx, "✅ 变量别名识别: %s -> %s", varName, targetVarName)
+                    print(string.format("    ✅ 变量别名识别: %s -> %s", varName, targetVarName))
                 end
             end
             
@@ -556,27 +561,21 @@ function analyzeMemberVariableDefinition(ctx, uri, moduleId, source)
     -- 尝试将成员变量添加到对应的类中
     local targetClass = nil
     
-    -- 检查objName是否是已知的类别名
-    local alias = ctx.symbols.aliases[objName]
-    if alias and alias.type == 'class_definition' then
-        targetClass = alias.targetClass
-    elseif objName == 'self' then
+    if objName == 'self' then
         -- 如果是self，需要从当前上下文推断类名
         targetClass = findCurrentClassName(ctx, source)
     else
-        -- 直接使用objName作为类名
-        targetClass = objName
+        -- 使用递归别名解析
+        local _, resolvedClassName = context.resolveAlias(ctx, objName)
+        targetClass = resolvedClassName or objName
     end
     
     if targetClass then
-        -- 查找对应的类符号
-        for classId, classSymbol in pairs(ctx.symbols.classes) do
-            if classSymbol.name == targetClass then
-                table.insert(classSymbol.members, memberId)
-                context.debug(ctx, "成员变量: %s.%s -> %s (类: %s)", 
-                    objName, memberName, memberType, targetClass)
-                break
-            end
+        local targetClassId, targetClassSymbol = context.findGlobalClass(ctx, targetClass)
+        if targetClassSymbol then
+            table.insert(targetClassSymbol.members, memberId)
+            context.debug(ctx, "成员变量: %s.%s -> %s (类: %s)", 
+                objName, memberName, memberType, targetClass)
         end
     end
     
@@ -596,13 +595,9 @@ function findCurrentClassName(ctx, source)
                 -- 这是一个方法定义
                 local className = utils.getNodeName(funcParent.node)
                 if className then
-                    -- 检查是否是别名
-                    local alias = ctx.symbols.aliases[className]
-                    if alias and alias.type == 'class_definition' then
-                        return alias.targetClass
-                    else
-                        return className
-                    end
+                    -- 使用递归别名解析
+                    local _, resolvedClassName = context.resolveAlias(ctx, className)
+                    return resolvedClassName or className
                 end
             end
             break
@@ -657,6 +652,89 @@ function phase1.analyze(ctx)
         end
     end
     context.debug(ctx, "重新关联了 %d 个方法和静态函数", methodsLinked)
+    
+    -- 别名合并处理
+    context.debug(ctx, "开始别名合并处理...")
+    
+    -- 第一步：处理变量别名，将它们转换为类别名（支持多层转换）
+    local maxIterations = 10  -- 防止无限循环
+    local hasChanges = true
+    local iteration = 0
+    
+    while hasChanges and iteration < maxIterations do
+        hasChanges = false
+        iteration = iteration + 1
+        
+        for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+            if aliasInfo.type == 'variable_alias' then
+                local targetName = aliasInfo.targetName
+                local targetAlias = ctx.symbols.aliases[targetName]
+                if targetAlias and targetAlias.type == 'class_definition' then
+                    -- 将变量别名转换为类别名
+                    ctx.symbols.aliases[aliasName] = {
+                        type = 'class_definition',
+                        targetClass = targetAlias.targetClass,
+                        symbolId = targetAlias.symbolId
+                    }
+                    context.debug(ctx, "转换变量别名为类别名: %s -> %s (迭代%d)", aliasName, targetAlias.targetClass, iteration)
+                    hasChanges = true
+                end
+            end
+        end
+    end
+    
+    -- 第二步：收集所有需要合并的类
+    local mergedClasses = {}
+    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+        if aliasInfo.type == 'class_definition' then
+            local targetClass = aliasInfo.targetClass
+            if not mergedClasses[targetClass] then
+                mergedClasses[targetClass] = {}
+            end
+            table.insert(mergedClasses[targetClass], {
+                name = aliasName,
+                symbolId = aliasInfo.symbolId,
+                info = aliasInfo
+            })
+        end
+    end
+    
+    -- 第三步：执行别名合并
+    local totalMerged = 0
+    for className, aliases in pairs(mergedClasses) do
+        if #aliases > 1 then
+            context.mergeClassAliases(ctx, className)
+            totalMerged = totalMerged + 1
+            context.debug(ctx, "合并类别名: %s (%d个别名)", className, #aliases)
+        end
+    end
+    
+    -- 第四步：重新关联使用别名定义的函数到正确的类
+    for funcId, func in pairs(ctx.symbols.functions) do
+        if func.className then
+            local alias = ctx.symbols.aliases[func.className]
+            if alias and alias.type == 'class_definition' then
+                local targetClassId, targetClassSymbol = context.findGlobalClass(ctx, alias.targetClass)
+                if targetClassSymbol then
+                    -- 检查函数是否已经在目标类的方法列表中
+                    local alreadyLinked = false
+                    for _, methodId in ipairs(targetClassSymbol.methods) do
+                        if methodId == funcId then
+                            alreadyLinked = true
+                            break
+                        end
+                    end
+                    
+                    if not alreadyLinked then
+                        table.insert(targetClassSymbol.methods, funcId)
+                        context.debug(ctx, "重新关联别名函数: %s -> %s", func.name, alias.targetClass)
+                    end
+                end
+            end
+        end
+    end
+    
+    context.debug(ctx, "别名合并完成，共合并了 %d 个类", totalMerged)
     
     -- 统计信息
     local moduleCount = utils.tableSize(ctx.symbols.modules)
