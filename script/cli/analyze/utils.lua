@@ -1,3 +1,7 @@
+---
+--- Created by fanggang
+--- DateTime: 2025/7/6 17:27
+---
 -- analyze/utils.lua
 -- 工具函数模块
 
@@ -29,30 +33,6 @@ function utils.getModulePath(uri, rootUri)
     local modulePath = relativePath:gsub("[/\\]", ".")
     
     return modulePath
-end
-
--- 获取模块中定义的类名列表
-function utils.getClassNamesFromModule(ctx, moduleId)
-    local classNames = {}
-    local moduleSymbol = ctx.symbols.modules[moduleId]
-    if moduleSymbol and moduleSymbol.classes then
-        for _, classId in ipairs(moduleSymbol.classes) do
-            local classSymbol = ctx.symbols.classes[classId]
-            if classSymbol then
-                table.insert(classNames, classSymbol.name)
-            end
-        end
-    end
-    return classNames
-end
-
--- 获取模块的主要类名（如果只有一个类）
-function utils.getMainClassFromModule(ctx, moduleId)
-    local classNames = utils.getClassNamesFromModule(ctx, moduleId)
-    if #classNames == 1 then
-        return classNames[1]
-    end
-    return nil
 end
 
 -- 获取AST节点的位置信息
@@ -239,13 +219,16 @@ function utils.getCallName(source)
 end
 
 -- 获取require模块路径
+function utils.getFormularModulePath(p)
+    return string.gsub(p, "[/\\]", ".")
+end
 function utils.getRequireModulePath(source)
     if not source or source.type ~= 'call' then
         return nil
     end
     
     if source.args and source.args[1] and source.args[1].type == 'string' then
-        return source.args[1][1]
+        return utils.getFormularModulePath(source.args[1][1])
     end
     
     return nil
@@ -277,6 +260,16 @@ function utils.getFunctionName(source)
     end
     
     return nil
+end
+
+-- 检查数组是否包含某个值
+function utils.containsValue(array, value)
+    for _, v in ipairs(array) do
+        if v == value then
+            return true
+        end
+    end
+    return false
 end
 
 return utils 

@@ -3,7 +3,6 @@ local util    = require 'utility'
 local version = require 'version'
 
 require 'config.env'
-
 local function getValue(value)
     if value == 'true' then
         value = true

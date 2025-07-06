@@ -1,17 +1,10 @@
 local lclient   = require 'lclient'()
 local furi      = require 'file-uri'
-local ws        = require 'workspace'
-local files     = require 'files'
 local util      = require 'utility'
-local jsonb     = require 'json-beautify'
 local lang      = require 'language'
-local config    = require 'config.config'
 local fs        = require 'bee.filesystem'
 local provider  = require 'provider'
 local await     = require 'await'
-local parser    = require 'parser'
-local guide     = require 'parser.guide'
-local vm        = require 'vm'
 require 'plugin'
 
 local export = {}
@@ -19,14 +12,15 @@ function export.runCLI()
     lang(LOCALE)
     
     -- 检查分析目标
-    if not ANALYZE then
+    local dir = _G['ANALYZE']
+    if not dir then
         print('错误: 必须指定分析目标')
         print('使用 --analyze=目录')
         return 1
     end
     
     -- 确定根路径
-    local rootPath = fs.canonical(fs.path(ANALYZE)):string()
+    local rootPath = fs.canonical(fs.path(dir)):string()
     local rootUri = furi.encode(rootPath)
     
     if not rootUri then
@@ -61,11 +55,13 @@ function export.runCLI()
         -- 使用新的模块化分析器
         print('正在加载分析器模块...')
         local analyzer = require 'cli.analyze.init'
+        local context = require 'cli.analyze.context'
         print('分析器模块加载完成')
         
         -- 创建分析选项
+        local dbg = _G['ANALYZE_DEBUG']
         local options = {
-            debug = ANALYZE_DEBUG == true or ANALYZE_DEBUG == "true" or ANALYZE_DEBUG == "1"
+            debug = dbg == true or dbg == "true" or dbg == "1"
         }
         
         -- 运行分析
@@ -74,8 +70,8 @@ function export.runCLI()
         print('分析运行完成')
         
         -- 输出结果（使用旧的输出格式作为兼容）
-        local jsonFile = ANALYZE_OUTPUT or (rootPath .. '/lua_analysis_output.json')
-        local mdFile = ANALYZE_REPORT or (rootPath .. '/lua_analysis_report.md')
+        local jsonFile = _G['ANALYZE_OUTPUT'] or (rootPath .. '/lua_analysis_output.json')
+        local mdFile = _G['ANALYZE_REPORT'] or (rootPath .. '/lua_analysis_report.md')
         
         -- 简单的JSON输出
         local jsonOutput = require('json-beautify').beautify({
@@ -84,7 +80,7 @@ function export.runCLI()
                 analyzer = 'lua-language-server-modular',
                 version = '2.0.0'
             },
-            symbols = ctx.symbols,
+            symbols = context.getSerializableSymbols(ctx),
             entities = ctx.entities,
             relations = ctx.relations,
             statistics = ctx.statistics

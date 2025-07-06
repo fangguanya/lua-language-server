@@ -1,10 +1,16 @@
+---
+--- Created by fanggang
+--- DateTime: 2025/7/6 17:27
+---
 -- analyze/context.lua
 -- 全局上下文管理
 
 local furi = require 'file-uri'
 local files = require 'files'
 local util = require 'utility'
-
+local fs = require 'bee.filesystem'
+local symbol = require 'cli.analyze.symbol'
+local utils = require 'cli.analyze.utils'
 local context = {}
 
 -- 创建新的分析上下文
@@ -18,14 +24,12 @@ function context.new(rootUri, options)
         nextId = 1,
         
         -- 符号表 (Phase 1)
-        symbols = {
-            modules = {},           -- 模块定义 {moduleId -> {name, uri, exports, ...}}
-            classes = {},           -- 类定义 {classId -> {name, module, members, ...}}
-            functions = {},         -- 函数定义 {funcId -> {name, scope, params, ...}}
-            variables = {},         -- 变量定义 {varId -> {name, scope, type, ...}}
-            members = {},           -- 成员变量定义 {memberId -> {name, ownerObject, memberType, ...}}
-            aliases = {},           -- 别名映射 {aliasName -> targetId}
-        },
+        symbols = {},
+        classes = {},   -- 对symbols的加速（name -> symbol对象
+        modules = {},   -- 对symbols的加速（name -> symbol对象
+        asts = {},      -- 对symbols的加速和查询（ast -> symbol对象
+        uriToModule = {},  -- URI到模块对象的映射（uri -> module对象），避免重复获取AST
+        fileList = {},     -- 文件URI列表缓存，避免重复扫描
         
         -- 类型信息 (Phase 2)
         types = {
@@ -67,14 +71,8 @@ function context.new(rootUri, options)
             },
             -- 目录过滤配置（支持多个目录和模式）
             excludeDirectories = {
-                "Config",           -- 配置目录
-                "config",           -- 小写配置目录
-                "Data/Config",      -- 数据配置目录
-                "Data\\Config",     -- Windows路径分隔符
-                "Assets/Config",    -- 资源配置目录
-                "Assets\\Config",   -- Windows路径分隔符
-                "Temp",             -- 临时目录
-                "temp",             -- 小写临时目录
+                "Data/",      -- 数据配置目录
+                "Data\\",     -- Windows路径分隔符
                 ".git",             -- Git目录
                 ".svn",             -- SVN目录
                 ".vscode",          -- VSCode目录
@@ -82,16 +80,11 @@ function context.new(rootUri, options)
             },
             -- 目录过滤模式（支持通配符）
             excludePatterns = {
-                ".*[/\\\\][Cc]onfig$",         -- 任何以Config结尾的目录
-                ".*[/\\\\][Dd]ata[/\\\\][Cc]onfig$", -- Data/Config目录
-                ".*[/\\\\][Aa]ssets[/\\\\][Cc]onfig$", -- Assets/Config目录
-                ".*[/\\\\][Tt]emp$",           -- 任何以Temp结尾的目录
-                ".*[/\\\\]%..*$"               -- 任何以.开头的隐藏目录
             },
             debugMode = options and options.debug or false
         }
     }
-    
+    -- 不再使用applyMethods，避免函数引用导致JSON序列化问题
     return ctx
 end
 
@@ -104,13 +97,13 @@ end
 
 -- 获取文件列表
 function context.getFiles(ctx)
+    -- 如果已经缓存了文件列表，直接返回
+    if #ctx.fileList > 0 then
+        return ctx.fileList
+    end
+    
     local uris = {}
-    
-    -- 手动扫描文件并添加到workspace
-    local fs = require 'bee.filesystem'
-    local furi = require 'file-uri'
-    local files = require 'files'
-    
+        
     -- 将URI转换为路径
     local rootPath = furi.decode(ctx.rootUri)
     if not rootPath then
@@ -158,6 +151,9 @@ function context.getFiles(ctx)
     end
     
     scanDirectory(rootPath)
+    
+    -- 缓存文件列表
+    ctx.fileList = uris
     return uris
 end
 
@@ -196,59 +192,6 @@ function context.shouldExcludeDirectory(ctx, dirPath)
     return false, nil
 end
 
--- 添加符号
-function context.addSymbol(ctx, symbolType, symbolData)
-    local id = context.generateId(ctx, symbolType)
-    symbolData.id = id
-    
-    -- 符号表名称映射
-    local symbolTableNames = {
-        module = "modules",
-        class = "classes", 
-        ["function"] = "functions",
-        variable = "variables",
-        member = "members"
-    }
-    
-    local tableName = symbolTableNames[symbolType] or (symbolType .. 's')
-    
-    -- 确保符号表存在
-    local symbolTable = ctx.symbols[tableName]
-    if not symbolTable then
-        ctx.symbols[tableName] = {}
-        symbolTable = ctx.symbols[tableName]
-    end
-    
-    symbolTable[id] = symbolData
-    ctx.statistics.totalSymbols = ctx.statistics.totalSymbols + 1
-    return id
-end
-
--- 查找符号
-function context.findSymbol(ctx, symbolType, predicate)
-    -- 符号表名称映射
-    local symbolTableNames = {
-        module = "modules",
-        class = "classes", 
-        ["function"] = "functions",
-        variable = "variables",
-        member = "members"
-    }
-    
-    local tableName = symbolTableNames[symbolType] or (symbolType .. 's')
-    local symbolTable = ctx.symbols[tableName]
-    if not symbolTable then
-        return nil
-    end
-    
-    for id, symbol in pairs(symbolTable) do
-        if predicate(symbol) then
-            return id, symbol
-        end
-    end
-    return nil
-end
-
 -- 添加实体
 function context.addEntity(ctx, entityType, entityData)
     local id = context.generateId(ctx, "entity")
@@ -274,174 +217,269 @@ function context.addRelation(ctx, relationType, fromId, toId, metadata)
     return id
 end
 
--- =======================================
--- 符号操作封装函数
--- =======================================
+-- 添加符号
+function context.addModule(ctx, name, filename, uri, ast)
+    name = utils.getFormularModulePath(name)
+    local module = ctx.modules[name]
+    if module ~= nil then
+        module.ast = ast
+        ctx.asts[ast] = module
+        if uri then
+            ctx.uriToModule[uri] = module
+        end
+        return module 
+    end
+    
+    local id = context.generateId(ctx, 'module')
+    module = symbol.module.new(id, name, ast)
+    context.addSymbol(ctx, module)
+    ctx.modules[name] = module
+    ctx.asts[ast] = module
+    if uri then
+        ctx.uriToModule[uri] = module
+    end
+    ctx.filename = filename
+    ctx.uri = uri
+    return module
+end
+function context.addClass(ctx, name, ast, parent)
+    name = utils.getFormularModulePath(name)
+    local cls = ctx.classes[name]
+    if cls ~= nil then
+        return cls
+    end
+    local id = context.generateId(ctx, 'class')
+    cls = symbol.class.new(id, name, ast)
+    cls.parent = parent
+    parent:addClass(cls)
+    context.addSymbol(ctx, cls)
+    ctx.classes[name] = cls
+    ctx.asts[ast] = cls
+    return cls
+end
+function context.addMethod(ctx, name, ast, parent)
+    local id = context.generateId(ctx, 'function')  -- 因为function是关键字，所以代码里面变量名为method
+    local mtd = symbol.method.new(id, name, ast)
+    mtd.parent = parent
+    -- TODO：增加参数处理
+    parent:addMethod(mtd)
+    context.addSymbol(ctx, mtd)
+    ctx.asts[ast] = mtd
+    return mtd
+end
+function context.addVariable(ctx, name, ast, parent)
+    local id = context.generateId(ctx, 'variable')
+    local var = symbol.variable.new(id, name, ast)
+    var.parent = parent
+    parent:addVariable(var)
+    context.addSymbol(ctx, var)
+    ctx.asts[ast] = var
+    return var
+end
+function context.addReference(ctx, name, ast, parent)
+    if parent.type ~= SYMBOL_TYPE.MODULE then
+        error("只能为module添加reference")
+    end
+    
+    -- name就是所引用的模块名称
+    name = utils.getFormularModulePath(name)
+    
+    -- 先找到目标模块的symbol符号信息
+    local targetModule = ctx.modules[name]
+    if targetModule == nil then
+        targetModule = context.addModule(ctx, name, nil)
+    end
+    
+    local id = context.generateId(ctx, 'require')
+    local a = symbol.reference.new(id, name, ast)
+    a.parent = parent
+    -- 将找到的module-id进行处理
+    a.target = targetModule.id
+    parent:addReference(a)
+    context.addSymbol(ctx, a)
+    ctx.asts[ast] = a
+    return a
+end
 
--- 递归解析别名，找到真正的类型
-function context.resolveAlias(ctx, aliasName, visited)
+function context.addSymbol(ctx, sym)
+    ctx.symbols[sym.id] = sym
+    ctx.statistics.totalSymbols = ctx.statistics.totalSymbols + 1
+end
+
+-- 查找符号：直接查找（不处理alias的情况）
+function context.findSymbol(ctx, predicate)
+    for id, symbol in pairs(ctx.symbols) do
+        if predicate(symbol) then
+            return id, symbol
+        end
+    end
+    return nil
+end
+
+-- 递归解析别名，找到真正的类型，需要考虑alias的情况
+function context.resolveSymbol(ctx, sym_id)
+    local result = ctx.symbols[sym_id]
+    if result == nil then
+        return nil, nil
+    end
+    return result.id, result
+end
+function context.resolveName(ctx, name, scope)    
+    if scope == nil or scope.container == false then
+        context.debug(ctx, "⚠️  检查 %s 符号遇到非scope的类型：%s", name, tostring(scope))
+        return nil, nil
+    end
+    
+    -- 在当前作用域查找类
+    for _, classId in ipairs(scope.classes) do
+        local class = ctx.symbols[classId]
+        if class and class.name == name then
+            return context.resolveSymbol(ctx, classId)
+        end
+    end
+    
+    -- 在当前作用域查找方法
+    for _, methodId in ipairs(scope.methods) do
+        local method = ctx.symbols[methodId]
+        if method and method.name == name then
+            return context.resolveSymbol(ctx, methodId)
+        end
+    end
+    
+    -- 在当前作用域查找变量
+    for _, varId in ipairs(scope.variables) do
+        local var = ctx.symbols[varId]
+        if var and var.name == name then
+            return context.resolveSymbol(ctx, varId)
+        end
+    end
+    
+    -- 在父作用域查找
+    if scope.parent then
+        return context.resolveName(ctx, name, scope.parent)
+    end
+    
+    -- 如果在作用域链中没有找到，尝试在全局模块中查找
+    for moduleName, module in pairs(ctx.modules) do
+        if module.name == name then
+            return module.id, module
+        end
+    end
+    
+    -- 如果还没有找到，尝试在全局类中查找
+    for className, class in pairs(ctx.classes) do
+        if class.name == name then
+            return class.id, class
+        end
+    end
+    
+    return nil, nil
+end
+
+-- 递归清理函数引用和不可序列化的内容
+local function deepClean(obj, visited)
     visited = visited or {}
     
-    -- 防止循环引用
-    if visited[aliasName] then
-        context.debug(ctx, "⚠️  检测到循环别名引用: %s", aliasName)
-        return nil, nil
-    end
-    visited[aliasName] = true
-    
-    local alias = ctx.symbols.aliases[aliasName]
-    if not alias then
-        return nil, nil
-    end
-    
-    -- 如果是类定义别名，直接返回
-    if alias.type == 'class_definition' then
-        return alias.symbolId, alias.targetClass
-    end
-    
-    -- 如果是模块导入别名，需要进一步查找
-    if alias.type == 'module_import' then
-        local targetModule = alias.targetModule
-        if targetModule then
-            -- 递归查找模块对应的类
-            return context.resolveAlias(ctx, targetModule, visited)
-        end
-    end
-    
-    -- 如果是变量别名，查找变量指向的类型
-    if alias.type == 'variable_alias' then
-        local targetName = alias.targetName
-        if targetName then
-            return context.resolveAlias(ctx, targetName, visited)
-        end
-    end
-    
-    return nil, nil
-end
-
--- 查找全局类定义（支持多模块）
-function context.findGlobalClass(ctx, className)
-    -- 方法1：直接通过类名查找
-    for classId, classSymbol in pairs(ctx.symbols.classes) do
-        if classSymbol.name == className then
-            return classId, classSymbol
-        end
-    end
-    
-    -- 方法2：通过别名查找
-    local classId, resolvedClassName = context.resolveAlias(ctx, className)
-    if classId then
-        return classId, ctx.symbols.classes[classId]
-    end
-    
-    -- 方法3：反向查找别名（处理多层别名的情况）
-    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-        if aliasInfo.type == 'class_definition' and aliasInfo.targetClass == className then
-            return aliasInfo.symbolId, ctx.symbols.classes[aliasInfo.symbolId]
-        end
-    end
-    
-    return nil, nil
-end
-
--- 查找类的所有别名
-function context.findClassAliases(ctx, className)
-    local aliases = {}
-    
-    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-        if aliasInfo.type == 'class_definition' and aliasInfo.targetClass == className then
-            table.insert(aliases, {
-                name = aliasName,
-                symbolId = aliasInfo.symbolId,
-                info = aliasInfo
-            })
-        end
-    end
-    
-    return aliases
-end
-
--- 合并同类型的别名（解决TmpResult和WeaponClass都指向Weapon的问题）
-function context.mergeClassAliases(ctx, className)
-    local aliases = context.findClassAliases(ctx, className)
-    if #aliases <= 1 then
-        return -- 没有需要合并的别名
-    end
-    
-    -- 找到主要的类定义
-    local mainClassId, mainClassSymbol = context.findGlobalClass(ctx, className)
-    if not mainClassId or not mainClassSymbol then
-        context.debug(ctx, "⚠️  未找到主要类定义: %s", className)
-        return
-    end
-    
-    context.debug(ctx, "🔄 合并类别名: %s (%d个别名)", className, #aliases)
-    
-    -- 合并所有别名的成员和方法到主类中
-    for _, alias in ipairs(aliases) do
-        if alias.symbolId ~= mainClassId then
-            local aliasClassSymbol = ctx.symbols.classes[alias.symbolId]
-            if aliasClassSymbol then
-                -- 合并成员
-                for _, memberId in ipairs(aliasClassSymbol.members or {}) do
-                    if not context.containsValue(mainClassSymbol.members, memberId) then
-                        table.insert(mainClassSymbol.members, memberId)
-                    end
-                end
-                
-                -- 合并方法
-                for _, methodId in ipairs(aliasClassSymbol.methods or {}) do
-                    if not context.containsValue(mainClassSymbol.methods, methodId) then
-                        table.insert(mainClassSymbol.methods, methodId)
-                    end
-                end
-                
-                context.debug(ctx, "  ✅ 合并别名 %s -> %s", alias.name, className)
-            end
-        end
-    end
-    
-    -- 更新所有别名指向主类
-    for _, alias in ipairs(aliases) do
-        ctx.symbols.aliases[alias.name] = {
-            type = 'class_definition',
-            targetClass = className,
-            symbolId = mainClassId
-        }
-    end
-end
-
--- 检查数组是否包含某个值
-function context.containsValue(array, value)
-    for _, v in ipairs(array) do
-        if v == value then
-            return true
-        end
-    end
-    return false
-end
-
--- 获取类的完整信息（包括所有别名的成员和方法）
-function context.getCompleteClassInfo(ctx, className)
-    local classId, classSymbol = context.findGlobalClass(ctx, className)
-    if not classId then
+    if obj == nil then
         return nil
     end
     
-    -- 合并别名信息
-    context.mergeClassAliases(ctx, className)
+    local objType = type(obj)
     
-    -- 返回更新后的类信息
-    return classId, ctx.symbols.classes[classId]
+    -- 直接返回基本类型
+    if objType == 'string' or objType == 'number' or objType == 'boolean' then
+        return obj
+    end
+    
+    -- 跳过函数类型
+    if objType == 'function' then
+        return nil
+    end
+    
+    -- 跳过userdata和thread
+    if objType == 'userdata' or objType == 'thread' then
+        return nil
+    end
+    
+    -- 处理表类型
+    if objType == 'table' then
+        -- 防止循环引用
+        if visited[obj] then
+            return nil
+        end
+        visited[obj] = true
+        
+        local cleaned = {}
+        for key, value in pairs(obj) do
+            local cleanKey = deepClean(key, visited)
+            local cleanValue = deepClean(value, visited)
+            if cleanKey ~= nil then
+                -- 对于空表也要保留（如空的references或refs数组）
+                if cleanValue ~= nil or (type(value) == 'table' and next(value) == nil) then
+                    cleaned[cleanKey] = cleanValue or {}
+                end
+            end
+        end
+        
+        visited[obj] = nil
+        return cleaned
+    end
+    
+    return nil
 end
 
--- 添加变量别名
-function context.addVariableAlias(ctx, aliasName, targetName)
-    ctx.symbols.aliases[aliasName] = {
-        type = 'variable_alias',
-        targetName = targetName
-    }
-    context.debug(ctx, "变量别名: %s -> %s", aliasName, targetName)
+-- 根据URI获取模块对象（避免重复获取AST）
+function context.getModuleByUri(ctx, uri)
+    return ctx.uriToModule[uri]
+end
+
+-- 创建可序列化的符号数据（移除函数引用）
+function context.getSerializableSymbols(ctx)
+    local serializableSymbols = {}
+    
+    for id, symbol in pairs(ctx.symbols) do
+        local cleanSymbol = deepClean(symbol)
+        
+        -- 移除AST引用（通常包含函数）
+        if cleanSymbol then
+            cleanSymbol.ast = nil
+            serializableSymbols[id] = cleanSymbol
+        end
+    end
+    
+    return serializableSymbols
+end
+
+-- 辅助函数：查找当前作用域
+function context.findCurrentScope(ctx, source)
+    local current = source
+    while current and current.parent do
+        current = current.parent
+        local symbol = ctx.asts[current]
+        if symbol and symbol.container then
+            return symbol
+        end
+    end
+    
+    -- 如果没有找到，返回当前模块
+    local rootAst = source
+    while rootAst.parent do
+        rootAst = rootAst.parent
+    end
+    return ctx.asts[rootAst]
+end
+
+-- 辅助函数：查找当前方法
+function context.findCurrentMethod(ctx, source)
+    local current = source
+    while current and current.parent do
+        current = current.parent
+        local symbol = ctx.asts[current]
+        if symbol and symbol.type == SYMBOL_TYPE.METHOD then
+            return symbol
+        end
+    end
+    return nil
 end
 
 return context 

@@ -1,16 +1,24 @@
 -- analyze/phase1_symbols.lua
 -- 第一阶段：符号定义识别
+-- 重构版本：按照context.lua和symbol.lua的架构设计
 
 local files = require 'files'
 local guide = require 'parser.guide'
 local vm = require 'vm'
 local context = require 'cli.analyze.context'
 local utils = require 'cli.analyze.utils'
+local symbol = require 'cli.analyze.symbol'
+
+-- 导入符号类型常量
+local SYMBOL_TYPE = symbol.SYMBOL_TYPE
+local FUNCTION_ANONYMOUS = symbol.FUNCTION_ANONYMOUS
 
 local phase1 = {}
 
 -- 分析单个文件的符号定义
 local function analyzeFileSymbols(ctx, uri)
+    local fileName = utils.getFileName(uri)
+    local modulePath = utils.getModulePath(uri, ctx.rootUri)
     local text = files.getText(uri)
     if not text then
         context.debug(ctx, "无法读取文件: %s", uri)
@@ -24,728 +32,1050 @@ local function analyzeFileSymbols(ctx, uri)
     end
     
     local ast = state.ast
-    local fileName = utils.getFileName(uri)
-    local modulePath = utils.getModulePath(uri, ctx.rootUri)
     
     print(string.format("  📄 分析文件: %s (%s)", fileName, modulePath))
     
     -- 创建模块符号
-    local moduleId = context.addSymbol(ctx, 'module', {
-        name = modulePath,
-        fileName = fileName,
-        uri = uri,
-        exports = {},
-        classes = {},
-        functions = {},
-        variables = {}
-    })
+    local module = context.addModule(ctx, modulePath, fileName, uri, ast)
     
     -- 分析模块级别的符号定义
     guide.eachSource(ast, function(source)
-        analyzeSymbolDefinition(ctx, uri, moduleId, source)
+        analyzeSymbolDefinition(ctx, uri, module, source)
     end)
     
     ctx.statistics.totalFiles = ctx.statistics.totalFiles + 1
 end
 
--- 分析符号定义
-function analyzeSymbolDefinition(ctx, uri, moduleId, source)
+-- 分析符号定义的主调度函数
+function analyzeSymbolDefinition(ctx, uri, module, source)
     local sourceType = source.type
     
-    if sourceType == 'setlocal' or sourceType == 'setglobal' then
-        analyzeVariableDefinition(ctx, uri, moduleId, source)
-    elseif sourceType == 'call' then
-        analyzeCallDefinition(ctx, uri, moduleId, source)
-    elseif sourceType == 'function' then
-        analyzeFunctionDefinition(ctx, uri, moduleId, source)
-    elseif sourceType == 'return' then
-        analyzeReturnStatement(ctx, uri, moduleId, source)
-    elseif sourceType == 'local' then
-        -- 处理local节点（包含变量定义）
-        analyzeLocalStatement(ctx, uri, moduleId, source)
+    -- 根据AST节点类型分发处理
+    if sourceType == 'setglobal' then
+        analyzeGlobalVariableDefinition(ctx, uri, module, source)
+    elseif sourceType == 'setlocal' then
+        analyzeLocalVariableDefinition(ctx, uri, module, source)  -- 这是对已声明局部变量的赋值
     elseif sourceType == 'setfield' then
-        -- 处理成员变量定义 (obj.field = value)
-        analyzeMemberVariableDefinition(ctx, uri, moduleId, source)
+        analyzeFieldDefinition(ctx, uri, module, source)
     elseif sourceType == 'setindex' then
-        -- 处理索引成员变量定义 (obj[key] = value)
-        analyzeMemberVariableDefinition(ctx, uri, moduleId, source)
+        analyzeIndexDefinition(ctx, uri, module, source)
+    elseif sourceType == 'setmethod' then
+        analyzeMethodDefinition(ctx, uri, module, source)
+    elseif sourceType == 'local' then
+        analyzeLocalStatement(ctx, uri, module, source)  -- 这是局部变量声明语句
+    elseif sourceType == 'function' then
+        analyzeFunctionDefinition(ctx, uri, module, source)
+    elseif sourceType == 'call' then
+        analyzeCallExpression(ctx, uri, module, source)
+    elseif sourceType == 'return' then
+        analyzeReturnStatement(ctx, uri, module, source)
     end
 end
 
--- 分析变量定义
-function analyzeVariableDefinition(ctx, uri, moduleId, source)
+-- 分析全局变量定义 (foo = value)
+function analyzeGlobalVariableDefinition(ctx, uri, module, source)
     local varName = utils.getNodeName(source.node)
     if not varName then return end
     
     local position = utils.getNodePosition(source)
-    local scope = utils.getScopeInfo(source)
     
-    -- 检查是否是require语句
+    -- 检查是否是require或类定义调用
     if source.value and source.value.type == 'call' then
-        local callNode = source.value.node
-        if callNode and callNode.type == 'getglobal' then
-            local funcName = utils.getNodeName(callNode)
+        local callResult = analyzeCallExpression(ctx, uri, module, source.value)
+        if callResult and callResult.isRequire then
+            -- 这是一个require调用，创建引用
+            local ref = context.addReference(ctx, callResult.moduleName, source, module)
+            ref.localName = varName
+            ref.position = position
             
-            if utils.isRequireFunction(funcName, ctx.config.requireFunctions) then
-                analyzeRequireStatement(ctx, uri, moduleId, source, varName, position)
+            context.debug(ctx, "全局模块引用: %s = require('%s')", varName, callResult.moduleName)
+            return
+        elseif callResult and callResult.isClassDefinition then
+            -- 这是一个类定义，创建类别名变量
+            local className = callResult.className
+            local class = ctx.classes[className]
+            if class then
+                -- 创建类的别名变量（作为普通容器）
+                local aliasVar = context.addVariable(ctx, varName, source, module)
+                table.insert(aliasVar.possibles, className)
+                
+                context.debug(ctx, "全局类别名: %s -> %s", varName, className)
                 return
             end
         end
     end
     
-    -- 普通变量定义
-    local varId = context.addSymbol(ctx, 'variable', {
-        name = varName,
-        module = moduleId,
-        uri = uri,
-        scope = scope,
-        position = position,
-        isGlobal = source.type == 'setglobal',
-        valueType = source.value and source.value.type or 'unknown'
-    })
+    -- 普通全局变量
+    local var = context.addVariable(ctx, varName, source, module)
+    var.isGlobal = true
+    var.position = position
     
-    -- 将变量添加到模块中
-    local moduleSymbol = ctx.symbols.modules[moduleId]
-    if moduleSymbol then
-        table.insert(moduleSymbol.variables, varId)
+    -- 分析赋值的值
+    if source.value then
+        analyzeValueAssignment(ctx, uri, module, var, source.value)
     end
     
-    context.debug(ctx, "变量定义: %s (ID: %s)", varName, varId)
+    context.debug(ctx, "全局变量: %s", varName)
 end
 
--- 分析require语句
-function analyzeRequireStatement(ctx, uri, moduleId, source, varName, position)
-    local args = source.value.args
-    if not args or not args[1] or args[1].type ~= 'string' then
-        return
-    end
-    
-    local modulePath = utils.getStringValue(args[1])
-    if not modulePath then return end
-    
-    local moduleType = modulePath:match("([^./]+)$") or modulePath
-    
-    -- 创建模块导入符号
-    local importId = context.addSymbol(ctx, 'variable', {
-        name = varName,
-        module = moduleId,
-        uri = uri,
-        position = position,
-        isImport = true,
-        importPath = modulePath,
-        importedModule = moduleType
-    })
-    
-    -- 注册别名映射（稍后在找到实际类定义时会更新）
-    ctx.symbols.aliases[varName] = {
-        type = 'module_import',
-        targetModule = moduleType,
-        symbolId = importId
-    }
-    
-    print(string.format("    ✅ require识别: %s = require('%s') → 模块 %s", varName, modulePath, moduleType))
-    
-    -- 将导入添加到模块中
-    local moduleSymbol = ctx.symbols.modules[moduleId]
-    if moduleSymbol then
-        table.insert(moduleSymbol.variables, importId)
-    end
-end
-
--- 分析调用定义（主要是类定义）
-function analyzeCallDefinition(ctx, uri, moduleId, source)
-    local callNode = source.node
-    if not callNode or callNode.type ~= 'getglobal' then
-        return
-    end
-    
-    local funcName = utils.getNodeName(callNode)
-    if not utils.isClassFunction(funcName, ctx.config.classFunctions) then
-        return
-    end
-    
-    local args = source.args
-    if not args or not args[1] or args[1].type ~= 'string' then
-        return
-    end
-    
-    local className = utils.getStringValue(args[1])
-    if not className then return end
+-- 分析局部变量赋值 (setlocal: var = value，对已声明的局部变量赋值)
+function analyzeLocalVariableDefinition(ctx, uri, module, source)
+    local varName = utils.getNodeName(source.node)
+    if not varName then return end
     
     local position = utils.getNodePosition(source)
+    local currentScope = context.findCurrentScope(ctx, source)
     
-    -- 解析继承关系
-    local parentClasses = {}
-    for i = 2, #args do
-        local arg = args[i]
-        if arg and arg.type == 'string' then
-            local parentName = utils.getStringValue(arg)
-            if parentName then
-                table.insert(parentClasses, parentName)
-            end
-        elseif arg and (arg.type == 'getlocal' or arg.type == 'getglobal') then
-            local parentVarName = utils.getNodeName(arg)
-            if parentVarName then
-                -- 通过别名查找真实类名
-                local alias = ctx.symbols.aliases[parentVarName]
-                if alias and alias.targetClass then
-                    table.insert(parentClasses, alias.targetClass)
-                else
-                    table.insert(parentClasses, parentVarName)
+    -- 查找已存在的局部变量
+    local existingVar = context.resolveName(ctx, varName, currentScope)
+    if existingVar and existingVar.type == SYMBOL_TYPE.VARIABLE and existingVar.isLocal then
+        -- 更新已存在的局部变量
+        context.debug(ctx, "更新局部变量: %s", varName)
+        
+        -- 检查是否是require语句
+        if source.value and source.value.type == 'call' then
+            local callResult = analyzeCallExpression(ctx, uri, module, source.value)
+            if callResult and callResult.isRequire then
+                -- 这是一个require调用，创建引用
+                local ref = context.addReference(ctx, callResult.moduleName, source, module)
+                ref.localName = varName
+                ref.position = position
+                
+                context.debug(ctx, "局部变量模块引用: %s = require('%s')", varName, callResult.moduleName)
+                return
+            elseif callResult and callResult.isClassDefinition then
+                -- 这是一个类定义
+                local className = callResult.className
+                local class = ctx.classes[className]
+                if class then
+                    -- 更新变量的类型
+                    table.insert(existingVar.possibles, className)
+                    
+                    context.debug(ctx, "局部变量类别名: %s -> %s", varName, className)
+                    return
                 end
             end
         end
+        
+        -- 分析赋值的值
+        if source.value then
+            analyzeValueAssignment(ctx, uri, module, existingVar, source.value)
+        end
+    else
+        -- 如果找不到已声明的局部变量，可能是错误的AST或者变量声明在其他地方
+        context.debug(ctx, "警告: 找不到已声明的局部变量: %s", varName)
+        
+        -- 作为备用，创建一个新的局部变量
+        local var = context.addVariable(ctx, varName, source, currentScope)
+        var.isLocal = true
+        var.position = position
+        
+        -- 分析赋值的值
+        if source.value then
+            analyzeValueAssignment(ctx, uri, module, var, source.value)
+        end
+        
+        context.debug(ctx, "创建新局部变量: %s", varName)
     end
+end
+
+-- 分析字段定义 (obj.field = value)
+function analyzeFieldDefinition(ctx, uri, module, source)
+    local objName = utils.getNodeName(source.node)
+    local fieldName = utils.getNodeName(source.field)
     
-    -- 创建类定义符号
-    local classId = context.addSymbol(ctx, 'class', {
-        name = className,
-        module = moduleId,
-        uri = uri,
-        position = position,
-        defineType = funcName,
-        parentClasses = parentClasses,
-        members = {},
-        methods = {}
-    })
+    if not objName or not fieldName then return end
     
-    -- 查找关联的变量（通过parent关系）
-    local parent = source.parent
+    local position = utils.getNodePosition(source)
+    local currentScope = context.findCurrentScope(ctx, source)
     
-    -- 寻找变量名的多种方式
-    local varName = nil
-    
-    -- 方式1：直接parent是setlocal/setglobal/local
-    if parent and (parent.type == 'setlocal' or parent.type == 'setglobal') then
-        varName = utils.getNodeName(parent.node)
-    elseif parent and parent.type == 'local' then
-        varName = parent[1] -- local节点的变量名在[1]中
-    end
-    
-    -- 方式2：parent是select，需要向上寻找
-    if not varName and parent then
-        local grandparent = parent.parent
-        if grandparent and (grandparent.type == 'setlocal' or grandparent.type == 'setglobal') then
-            varName = utils.getNodeName(grandparent.node)
-        elseif grandparent and grandparent.type == 'local' then
-            varName = grandparent[1] -- local节点的变量名在[1]中
+    -- 检查是否是self.xxx的情况
+    if objName == 'self' then
+        -- 需要找到当前方法所属的类或对象
+        local currentMethod = context.findCurrentMethod(ctx, source)
+        if currentMethod and currentMethod.parent then
+            local targetScope = currentMethod.parent
+            local var = context.addVariable(ctx, fieldName, source, targetScope)
+            var.isField = true
+            var.position = position
+            
+            -- 分析赋值的值
+            if source.value then
+                analyzeValueAssignment(ctx, uri, module, var, source.value)
+            end
+            
+            context.debug(ctx, "self成员字段: %s.%s", targetScope.name, fieldName)
+            return
         end
     end
     
-    -- 方式3：通过call节点的parent寻找
-    if not varName then
-        local currentNode = source
-        while currentNode and currentNode.parent do
-            currentNode = currentNode.parent
-            if currentNode.type == 'setlocal' or currentNode.type == 'setglobal' then
-                varName = utils.getNodeName(currentNode.node)
-                break
-            elseif currentNode.type == 'local' then
-                varName = currentNode[1] -- local节点的变量名在[1]中
-                break
+    -- 查找目标对象
+    local targetSymbolId, targetSymbol = context.resolveName(ctx, objName, currentScope)
+    if targetSymbol then
+        -- 任何容器都可以添加字段
+        if targetSymbol.container then
+            local var = context.addVariable(ctx, fieldName, source, targetSymbol)
+            var.isField = true
+            var.position = position
+            
+            -- 分析赋值的值
+            if source.value then
+                analyzeValueAssignment(ctx, uri, module, var, source.value)
+            end
+            
+            context.debug(ctx, "对象字段: %s.%s", objName, fieldName)
+        end
+    end
+end
+
+-- 分析索引定义 (obj[key] = value)
+function analyzeIndexDefinition(ctx, uri, module, source)
+    local objName = utils.getNodeName(source.node)
+    local indexKey = nil
+    
+    if source.index and source.index.type == 'string' then
+        indexKey = utils.getStringValue(source.index)
+    elseif source.index and source.index.type == 'integer' then
+        indexKey = tostring(source.index[1])
+    end
+    
+    if not objName or not indexKey then return end
+    
+    local position = utils.getNodePosition(source)
+    local currentScope = context.findCurrentScope(ctx, source)
+    
+    -- 查找目标对象
+    local targetSymbolId, targetSymbol = context.resolveName(ctx, objName, currentScope)
+    if targetSymbol then
+        -- 任何容器都可以添加索引
+        if targetSymbol.container then
+            local var = context.addVariable(ctx, indexKey, source, targetSymbol)
+            var.isIndex = true
+            var.position = position
+            
+            -- 分析赋值的值
+            if source.value then
+                analyzeValueAssignment(ctx, uri, module, var, source.value)
+            end
+            
+            context.debug(ctx, "对象索引: %s[%s]", objName, indexKey)
+        end
+    end
+end
+
+-- 分析方法定义 (obj:method(...))
+function analyzeMethodDefinition(ctx, uri, module, source)
+    local objName = utils.getNodeName(source.node)
+    local methodName = utils.getNodeName(source.method)
+    
+    if not objName or not methodName then return end
+    
+    local position = utils.getNodePosition(source)
+    local currentScope = context.findCurrentScope(ctx, source)
+    
+    -- 查找目标对象
+    local targetSymbolId, targetSymbol = context.resolveName(ctx, objName, currentScope)
+    if targetSymbol then
+        -- 任何容器都可以添加方法
+        if targetSymbol.container then
+            local method = context.addMethod(ctx, methodName, source, targetSymbol)
+            method.isMethod = true
+            method.position = position
+            
+            -- 分析函数体
+            if source.value and source.value.type == 'function' then
+                analyzeFunctionBody(ctx, uri, module, method, source.value)
+            end
+            
+            context.debug(ctx, "对象方法: %s:%s", objName, methodName)
+        end
+    end
+end
+
+-- 分析local语句声明 (local: local var = value，局部变量声明)
+function analyzeLocalStatement(ctx, uri, module, source)
+    -- 根据实际的AST结构重新实现
+    -- 从截图可以看出，local语句的结构是：
+    -- source[1] = 变量名字符串（如"Player"）
+    -- source.value = 赋值的值（如DefineClass调用）
+    
+    context.debug(ctx, "处理local声明语句: %s", source.type)
+    
+    -- 获取变量名
+    local varName = source[1]
+    if not varName or type(varName) ~= "string" then
+        context.debug(ctx, "local语句没有有效的变量名")
+        return
+    end
+    
+    local position = utils.getNodePosition(source)
+    local currentScope = context.findCurrentScope(ctx, source)
+    
+    context.debug(ctx, "处理local变量: %s", varName)
+    
+    -- 检查是否有赋值值
+    local value = source.value
+    if value then
+        context.debug(ctx, "local变量 %s 有赋值，类型: %s", varName, value.type)
+        
+        -- 检查是否是require语句
+        if value.type == 'call' then
+            local callResult = analyzeCallExpression(ctx, uri, module, value)
+            if callResult and callResult.isRequire then
+                -- 这是一个require调用，创建引用
+                local ref = context.addReference(ctx, callResult.moduleName, source, module)
+                ref.localName = varName
+                ref.position = position
+                
+                context.debug(ctx, "模块引用: %s = require('%s')", varName, callResult.moduleName)
+                return
+            elseif callResult and callResult.isClassDefinition then
+                -- 这是一个类定义
+                local className = callResult.className
+                local class = ctx.classes[className]
+                if class then
+                    -- 创建类的别名变量
+                    local aliasVar = context.addVariable(ctx, varName, source, currentScope)
+                    table.insert(aliasVar.possibles, className)
+                    
+                    context.debug(ctx, "局部类别名: %s -> %s", varName, className)
+                    return
+                end
             end
         end
-    end
-    
-    if varName then
-        -- 注册别名映射
-        ctx.symbols.aliases[varName] = {
-            type = 'class_definition',
-            targetClass = className,
-            symbolId = classId
-        }
         
-        context.debug(ctx, "类定义: %s (变量: %s)", className, varName)
+        -- 普通局部变量
+        local var = context.addVariable(ctx, varName, source, currentScope)
+        var.isLocal = true
+        var.position = position
+        
+        -- 分析赋值的值
+        analyzeValueAssignment(ctx, uri, module, var, value)
+        
+        context.debug(ctx, "局部变量（有赋值）: %s", varName)
     else
-        print(string.format("    ⚠️  未找到关联变量，parent类型: %s", parent and parent.type or "nil"))
+        -- 没有赋值的局部变量声明
+        local var = context.addVariable(ctx, varName, source, currentScope)
+        var.isLocal = true
+        var.position = position
+        
+        context.debug(ctx, "局部变量（无赋值）: %s", varName)
     end
-    
-    -- 将类添加到模块中
-    local moduleSymbol = ctx.symbols.modules[moduleId]
-    if moduleSymbol then
-        table.insert(moduleSymbol.classes, classId)
-    end
-    
-    context.debug(ctx, "类定义: %s (ID: %s)", className, classId)
 end
 
 -- 分析函数定义
-function analyzeFunctionDefinition(ctx, uri, moduleId, source)
-    local funcName = "anonymous"
-    local isMethod = false
-    local className = nil
-    
-    -- 获取函数名和类型
+function analyzeFunctionDefinition(ctx, uri, module, source)
     local parent = source.parent
+    local currentScope = context.findCurrentScope(ctx, source)
+    
+    -- 检查函数定义的上下文
     if parent then
-        if parent.type == 'setmethod' then
-            isMethod = true
-            local node = parent.node
-            local method = parent.method
-            if node and method then
-                local objName = utils.getNodeName(node)
-                local methodName = utils.getNodeName(method)
-                if objName and methodName then
-                    funcName = objName .. ':' .. methodName
-                    className = objName
-                end
+        if parent.type == 'setglobal' then
+            -- 全局函数 function foo(...)
+            local funcName = utils.getNodeName(parent.node)
+            if funcName then
+                local method = context.addMethod(ctx, funcName, source, module)
+                method.isGlobal = true
+                method.position = utils.getNodePosition(source)
+                
+                analyzeFunctionBody(ctx, uri, module, method, source)
+                context.debug(ctx, "全局函数: %s", funcName)
+            end
+        elseif parent.type == 'setlocal' then
+            -- 局部函数 local function foo(...)
+            local funcName = utils.getNodeName(parent.node)
+            if funcName then
+                local method = context.addMethod(ctx, funcName, source, currentScope)
+                method.isLocal = true
+                method.position = utils.getNodePosition(source)
+                
+                analyzeFunctionBody(ctx, uri, module, method, source)
+                context.debug(ctx, "局部函数: %s", funcName)
             end
         elseif parent.type == 'setfield' then
-            local node = parent.node
-            local field = parent.field
-            if node and field then
-                local objName = utils.getNodeName(node)
-                local fieldName = utils.getNodeName(field)
-                if objName and fieldName then
-                    funcName = objName .. '.' .. fieldName
-                    className = objName
+            -- 对象方法 obj.func = function(...)
+            local objName = utils.getNodeName(parent.node)
+            local methodName = utils.getNodeName(parent.field)
+            
+            if objName and methodName then
+                local targetSymbolId, targetSymbol = context.resolveName(ctx, objName, currentScope)
+                if targetSymbol then
+                    local targetScope = targetSymbol
+                    
+                    -- 如果是类别名，找到真正的类
+                    if targetSymbol.type == SYMBOL_TYPE.VARIABLE and targetSymbol.isClassAlias then
+                        local className = targetSymbol.targetClass
+                        targetScope = ctx.classes[className]
+                    end
+                    
+                    if targetScope and targetScope.container then
+                        local method = context.addMethod(ctx, methodName, source, targetScope)
+                        method.isMethod = false
+                        method.position = utils.getNodePosition(source)
+                        
+                        analyzeFunctionBody(ctx, uri, module, method, source)
+                        context.debug(ctx, "对象方法: %s.%s", objName, methodName)
+                    end
                 end
             end
-        elseif parent.type == 'setlocal' or parent.type == 'setglobal' then
-            local varName = utils.getNodeName(parent.node)
-            if varName then
-                funcName = varName
-            end
+        elseif parent.type == 'setmethod' then
+            -- 这种情况在analyzeMethodDefinition中处理
+            return
         elseif parent.type == 'local' then
-            -- 处理 local funcName = function(...) 的情况
-            local varName = parent[1]  -- local节点的变量名在[1]中
-            if varName then
-                funcName = varName
+            -- local func = function(...) 的情况
+            local funcName = parent[1]
+            if funcName then
+                local method = context.addMethod(ctx, funcName, source, currentScope)
+                method.isLocal = true
+                method.position = utils.getNodePosition(source)
+                
+                analyzeFunctionBody(ctx, uri, module, method, source)
+                context.debug(ctx, "局部函数变量: %s", funcName)
             end
-        elseif parent.type == 'setglobal' then
-            -- 处理全局函数声明 function globalFunc(...)
-            local varName = utils.getNodeName(parent.node)
-            if varName then
-                funcName = varName
-            end
+        else
+            -- 匿名函数
+            local method = context.addMethod(ctx, FUNCTION_ANONYMOUS, source, currentScope)
+            method.isAnonymous = true
+            method.position = utils.getNodePosition(source)
+            
+            analyzeFunctionBody(ctx, uri, module, method, source)
+            context.debug(ctx, "匿名函数")
         end
+    else
+        -- 匿名函数
+        local method = context.addMethod(ctx, FUNCTION_ANONYMOUS, source, currentScope)
+        method.isAnonymous = true
+        method.position = utils.getNodePosition(source)
+        
+        analyzeFunctionBody(ctx, uri, module, method, source)
+        context.debug(ctx, "匿名函数")
     end
-    
-    local position = utils.getNodePosition(source)
-    local scope = utils.getScopeInfo(source)
-    
-    -- 分析参数
-    local params = {}
-    
-    -- 如果是方法定义（使用冒号），自动添加self参数
-    if isMethod then
-        table.insert(params, {
-            name = "self",
-            index = 0,  -- self参数的索引为0，表示隐式参数
-            position = position,
-            isImplicitSelf = true,
-            className = className  -- 记录self的类型
-        })
-    end
-    
-    if source.args then
-        for i, arg in ipairs(source.args) do
+end
+
+-- 分析函数体
+function analyzeFunctionBody(ctx, uri, module, method, funcSource)
+    -- 分析函数参数
+    if funcSource.args then
+        for i, arg in ipairs(funcSource.args) do
             local paramName = utils.getNodeName(arg)
             if paramName then
-                table.insert(params, {
-                    name = paramName,
-                    index = isMethod and i or i,  -- 方法的参数索引需要考虑self
-                    position = utils.getNodePosition(arg)
-                })
+                local param = context.addVariable(ctx, paramName, arg, method)
+                param.isParameter = true
+                param.parameterIndex = i
+                param.position = utils.getNodePosition(arg)
+                
+                -- 如果是self参数，标记为self
+                if paramName == "self" then
+                    param.isSelf = true
+                end
+                
+                table.insert(method.parameters, param.id)
+                context.debug(ctx, "函数参数: %s[%d] = %s", method.name, i, paramName)
             end
         end
     end
     
-    -- 创建函数符号
-    local funcId = context.addSymbol(ctx, 'function', {
-        name = funcName,
-        module = moduleId,
-        uri = uri,
-        position = position,
-        scope = scope,
-        isMethod = isMethod,
-        className = className,
-        params = params,
-        isAnonymous = funcName == "anonymous"
-    })
+    -- 注意：不再手动添加self参数，因为setmethod类型的函数AST中已经包含了self参数
+    -- 这避免了重复添加self参数的问题
     
-    -- 将函数添加到模块中
-    local moduleSymbol = ctx.symbols.modules[moduleId]
-    if moduleSymbol then
-        table.insert(moduleSymbol.functions, funcId)
-    end
-    
-    -- 如果是类方法或静态函数，添加到类中
-    if className then
-        local targetClassId, targetClassSymbol = context.findGlobalClass(ctx, className)
-        
-        if targetClassSymbol then
-            table.insert(targetClassSymbol.methods, funcId)
-            context.debug(ctx, "方法关联: %s -> %s (%s)", 
-                funcName, targetClassSymbol.name, isMethod and "方法" or "静态函数")
-        else
-            context.debug(ctx, "⚠️  未找到类定义: %s (函数: %s)", className, funcName)
+    -- 分析函数体内的符号
+    guide.eachSource(funcSource, function(source)
+        if source ~= funcSource then  -- 避免递归处理自身
+            analyzeSymbolDefinition(ctx, uri, method, source)
         end
-    end
-    
-    context.debug(ctx, "函数定义: %s (ID: %s)", funcName, funcId)
+    end)
 end
 
--- 分析return语句
-function analyzeReturnStatement(ctx, uri, moduleId, source)
-    local returns = source.returns
-    if not returns or #returns == 0 then
-        return
-    end
+-- 分析函数调用表达式
+function analyzeCallExpression(ctx, uri, module, source)
+    local callNode = source.node
+    if not callNode then return nil end
     
-    -- 分析第一个返回值
-    local firstReturn = returns[1]
-    if not firstReturn then return end
+    local funcName = utils.getNodeName(callNode)
+    if not funcName then return nil end
     
-    local position = utils.getNodePosition(source)
-    
-    -- 记录模块返回信息
-    local moduleSymbol = ctx.symbols.modules[moduleId]
-    if moduleSymbol then
-        moduleSymbol.returnStatement = {
-            position = position,
-            returnType = firstReturn.type,
-            returnNode = firstReturn
-        }
-        
-        -- 如果返回的是变量，记录变量名
-        if firstReturn.type == 'getlocal' or firstReturn.type == 'getglobal' then
-            local varName = utils.getNodeName(firstReturn)
-            if varName then
-                moduleSymbol.returnVariable = varName
-                context.debug(ctx, "模块返回: %s", varName)
+    -- 检查是否是require函数
+    if utils.isRequireFunction(funcName, ctx.config.requireFunctions) then
+        local args = source.args
+        if args and args[1] and args[1].type == 'string' then
+            local modulePath = utils.getStringValue(args[1])
+            if modulePath then
+                return {
+                    isRequire = true,
+                    moduleName = modulePath,
+                    functionName = funcName
+                }
             end
         end
     end
-end
-
--- 分析local语句
-function analyzeLocalStatement(ctx, uri, moduleId, source)
-    if not source.keys or not source.values then return end
     
-    -- 处理每个变量定义
-    for i, key in ipairs(source.keys) do
-        local varName = utils.getNodeName(key)
-        if varName then
-            local position = utils.getNodePosition(key)
-            local scope = utils.getScopeInfo(source)
-            local value = source.values[i]
-            
-            -- 检查是否是require语句
-            if value and value.type == 'call' then
-                local callNode = value.node
-                if callNode and callNode.type == 'getglobal' then
-                    local funcName = utils.getNodeName(callNode)
-                    
-                    if utils.isRequireFunction(funcName, ctx.config.requireFunctions) then
-                        analyzeRequireStatement(ctx, uri, moduleId, {
-                            node = key,
-                            value = value,
-                            type = 'setlocal'
-                        }, varName, position)
-                        goto continue
+    -- 检查是否是类定义函数
+    if utils.isClassFunction(funcName, ctx.config.classFunctions) then
+        local args = source.args
+        if args and args[1] and args[1].type == 'string' then
+            local className = utils.getStringValue(args[1])
+            if className then
+                -- 创建类定义
+                local class = context.addClass(ctx, className, source, module)
+                class.defineFunction = funcName
+                class.position = utils.getNodePosition(source)
+                
+                -- 处理继承关系
+                for i = 2, #args do
+                    local arg = args[i]
+                    if arg and arg.type == 'string' then
+                        local parentName = utils.getStringValue(arg)
+                        if parentName then
+                            table.insert(class.parentClasses or {}, parentName)
+                        end
                     end
                 end
-            end
-            
-            -- 检查是否是变量别名 (local A = B)
-            if value and (value.type == 'getlocal' or value.type == 'getglobal') then
-                local targetVarName = utils.getNodeName(value)
-                if targetVarName then
-                    -- 这是一个变量别名，先记录下来
-                    context.addVariableAlias(ctx, varName, targetVarName)
-                    context.debug(ctx, "✅ 变量别名识别: %s -> %s", varName, targetVarName)
-                    print(string.format("    ✅ 变量别名识别: %s -> %s", varName, targetVarName))
-                end
-            end
-            
-            -- 普通变量定义
-            local varId = context.addSymbol(ctx, 'variable', {
-                name = varName,
-                module = moduleId,
-                uri = uri,
-                scope = scope,
-                position = position,
-                isGlobal = false,
-                valueType = value and value.type or 'unknown'
-            })
-            
-            -- 将变量添加到模块中
-            local moduleSymbol = ctx.symbols.modules[moduleId]
-            if moduleSymbol then
-                table.insert(moduleSymbol.variables, varId)
-            end
-            
-            context.debug(ctx, "局部变量定义: %s (ID: %s)", varName, varId)
-            
-            ::continue::
-        end
-    end
-end
-
--- 分析成员变量定义
-function analyzeMemberVariableDefinition(ctx, uri, moduleId, source)
-    local objName = nil
-    local memberName = nil
-    local position = utils.getNodePosition(source)
-    
-    -- 获取对象名和成员名
-    if source.type == 'setfield' then
-        -- obj.field = value
-        objName = utils.getNodeName(source.node)
-        memberName = utils.getNodeName(source.field)
-    elseif source.type == 'setindex' then
-        -- obj[key] = value
-        objName = utils.getNodeName(source.node)
-        if source.index and source.index.type == 'string' then
-            memberName = utils.getStringValue(source.index)
-        end
-    end
-    
-    if not objName or not memberName then
-        return
-    end
-    
-    -- 确定成员变量的类型
-    local memberType = 'unknown'
-    local valueType = 'unknown'
-    
-    if source.value then
-        valueType = source.value.type
-        
-        -- 基础类型推断
-        if valueType == 'string' then
-            memberType = 'string'
-        elseif valueType == 'number' or valueType == 'integer' then
-            memberType = 'number'
-        elseif valueType == 'boolean' then
-            memberType = 'boolean'
-        elseif valueType == 'table' then
-            memberType = 'table'
-        elseif valueType == 'call' then
-            -- 如果是函数调用，尝试推断类型
-            local callName = utils.getCallName(source.value)
-            if callName then
-                if callName:find(':new') or callName:find('%.new') then
-                    -- 构造函数调用
-                    local className = callName:match('([^:.]+)[:.][nN]ew')
-                    if className then
-                        memberType = className
-                    end
-                else
-                    memberType = 'function_result'
-                end
-            end
-        elseif valueType == 'getlocal' or valueType == 'getglobal' then
-            -- 变量引用
-            local varName = utils.getNodeName(source.value)
-            if varName then
-                memberType = 'reference:' .. varName
+                
+                context.debug(ctx, "类定义: %s", className)
+                return {
+                    isClassDefinition = true,
+                    className = className,
+                    functionName = funcName
+                }
             end
         end
     end
     
-    -- 创建成员变量符号
-    local memberId = context.addSymbol(ctx, 'member', {
-        name = memberName,
-        module = moduleId,
-        uri = uri,
-        position = position,
-        ownerObject = objName,
-        memberType = memberType,
-        valueType = valueType,
-        isField = source.type == 'setfield',
-        isIndex = source.type == 'setindex'
-    })
-    
-    -- 尝试将成员变量添加到对应的类中
-    local targetClass = nil
-    
-    if objName == 'self' then
-        -- 如果是self，需要从当前上下文推断类名
-        targetClass = findCurrentClassName(ctx, source)
-    else
-        -- 使用递归别名解析
-        local _, resolvedClassName = context.resolveAlias(ctx, objName)
-        targetClass = resolvedClassName or objName
-    end
-    
-    if targetClass then
-        local targetClassId, targetClassSymbol = context.findGlobalClass(ctx, targetClass)
-        if targetClassSymbol then
-            table.insert(targetClassSymbol.members, memberId)
-            context.debug(ctx, "成员变量: %s.%s -> %s (类: %s)", 
-                objName, memberName, memberType, targetClass)
-        end
-    end
-    
-    context.debug(ctx, "成员变量定义: %s.%s = %s (类型: %s)", 
-        objName, memberName, valueType, memberType)
-end
-
--- 查找当前类名（用于self引用）
-function findCurrentClassName(ctx, source)
-    -- 向上查找，寻找包含当前代码的函数定义
-    local current = source
-    while current and current.parent do
-        current = current.parent
-        if current.type == 'function' then
-            local funcParent = current.parent
-            if funcParent and funcParent.type == 'setmethod' then
-                -- 这是一个方法定义
-                local className = utils.getNodeName(funcParent.node)
-                if className then
-                    -- 使用递归别名解析
-                    local _, resolvedClassName = context.resolveAlias(ctx, className)
-                    return resolvedClassName or className
-                end
-            end
-            break
-        end
-    end
     return nil
 end
 
--- 主分析函数
+-- 分析return语句
+function analyzeReturnStatement(ctx, uri, module, source)
+    local currentScope = context.findCurrentScope(ctx, source)
+    
+    -- 如果在模块级别，记录模块的返回值
+    if currentScope.type == SYMBOL_TYPE.MODULE then
+        local returns = source.returns
+        if returns and #returns > 0 then
+            local firstReturn = returns[1]
+            if firstReturn then
+                currentScope.returns = firstReturn
+                
+                -- 如果返回的是变量，记录变量名
+                if firstReturn.type == 'getlocal' or firstReturn.type == 'getglobal' then
+                    local varName = utils.getNodeName(firstReturn)
+                    if varName then
+                        currentScope.returnVariable = varName
+                        context.debug(ctx, "模块返回: %s", varName)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- 分析值赋值
+function analyzeValueAssignment(ctx, uri, module, variable, valueSource)
+    if not valueSource then return end
+    
+    local valueType = valueSource.type
+    
+    -- 只记录可以立即确定的基础类型
+    if valueType == 'string' then
+        table.insert(variable.possibles, 'string')
+    elseif valueType == 'number' or valueType == 'integer' then
+        table.insert(variable.possibles, 'number')
+    elseif valueType == 'boolean' then
+        table.insert(variable.possibles, 'boolean')
+    elseif valueType == 'table' then
+        table.insert(variable.possibles, 'table')
+    elseif valueType == 'function' then
+        table.insert(variable.possibles, 'function')
+    elseif valueType == 'nil' then
+        table.insert(variable.possibles, 'nil')
+    elseif valueType == 'call' then
+        -- 函数调用结果 - 只处理可以立即确定类型的情况
+        local callResult = analyzeCallExpression(ctx, uri, module, valueSource)
+        if callResult and callResult.isClassDefinition then
+            -- 类定义调用，可以立即确定类型
+            table.insert(variable.possibles, callResult.className)
+        end
+        -- 其他函数调用结果在第二阶段处理
+    end
+    
+    -- 变量引用（getlocal, getglobal）在第二轮扫描refs时处理
+    -- 不在这里处理，避免字符串依赖
+end
+
+-- 分析单个文件的引用关系（第二遍处理）
+local function analyzeFileReferences(ctx, uri)
+    local fileName = utils.getFileName(uri)
+    
+    -- 直接从缓存中获取模块对象，避免重复获取AST
+    local module = context.getModuleByUri(ctx, uri)
+    if not module or not module.ast then
+        context.debug(ctx, "未找到缓存的模块: %s", fileName)
+        return
+    end
+    
+    local ast = module.ast
+    context.debug(ctx, "📄 处理引用: %s", fileName)
+    
+    -- 使用guide.eachSource遍历当前节点及其所有子节点
+    guide.eachSource(ast, function(source)
+        analyzeSourceReferences(ctx, uri, module, source)
+        
+        -- 特别处理函数体：对于函数类型的节点，需要递归处理其函数体
+        if source.type == 'function' then
+            -- 函数体内的引用需要特殊处理，因为它们可能引用函数参数
+            analyzeFunctionBodyReferences(ctx, uri, module, source)
+        end
+    end)
+end
+
+-- 分析函数体内的引用关系
+function analyzeFunctionBodyReferences(ctx, uri, module, funcSource)
+    context.debug(ctx, "分析函数体引用: %s", utils.getNodeName(funcSource) or "anonymous")
+    
+    -- 首先处理函数参数的引用
+    if funcSource.args then
+        for i, arg in ipairs(funcSource.args) do
+            local paramName = utils.getNodeName(arg)
+            if paramName then
+                -- 查找参数对应的符号
+                local paramSymbolId, paramSymbol = context.resolveName(ctx, paramName, context.findCurrentScope(ctx, funcSource))
+                if paramSymbol then
+                    -- 处理参数的引用
+                    if arg.refs then
+                        for _, ref in ipairs(arg.refs) do
+                            analyzeParameterReference(ctx, uri, module, paramSymbol, ref)
+                        end
+                    end
+                    
+                    context.debug(ctx, "处理函数参数引用: %s", paramName)
+                end
+            end
+        end
+    end
+    
+    -- 然后递归处理函数体内的所有节点
+    guide.eachSource(funcSource, function(source)
+        -- 跳过函数节点本身，避免无限递归
+        if source ~= funcSource then
+            analyzeSourceReferences(ctx, uri, module, source)
+            
+            -- 如果是嵌套函数，递归处理
+            if source.type == 'function' then
+                analyzeFunctionBodyReferences(ctx, uri, module, source)
+            end
+        end
+    end)
+end
+
+-- 分析函数参数的引用
+function analyzeParameterReference(ctx, uri, module, paramSymbol, refNode)
+    local refType = refNode.type
+    
+    -- 记录正向引用信息到参数符号的refs字段
+    table.insert(paramSymbol.refs, {
+        type = refType,
+        node = refNode,
+        position = utils.getNodePosition(refNode),
+        uri = uri,
+        isParameterReference = true
+    })
+    
+    context.debug(ctx, "参数引用: %s -> %s", paramSymbol.name, refType)
+    
+    -- 根据引用类型进行处理
+    if refType == 'getlocal' then
+        -- 参数被引用
+        local refName = utils.getNodeName(refNode)
+        if refName and refName == paramSymbol.name then
+            -- 在参数符号中记录被引用的信息
+            table.insert(paramSymbol.references, {
+                type = 'parameter_referenced',
+                position = utils.getNodePosition(refNode),
+                uri = uri
+            })
+            
+            context.debug(ctx, "参数被引用: %s", paramSymbol.name)
+        end
+    elseif refType == 'setlocal' then
+        -- 参数被重新赋值
+        table.insert(paramSymbol.references, {
+            type = 'parameter_reassigned',
+            position = utils.getNodePosition(refNode),
+            uri = uri
+        })
+        
+        context.debug(ctx, "参数被重新赋值: %s", paramSymbol.name)
+    end
+end
+
+-- 分析单个源节点的引用关系
+function analyzeSourceReferences(ctx, uri, module, source)
+    -- 处理当前节点的refs字段
+    if source.refs then
+        -- 获取当前节点对应的符号
+        local currentSymbol = ctx.asts[source]
+        if currentSymbol then
+            -- 处理每个引用
+            for _, ref in ipairs(source.refs) do
+                analyzeReference(ctx, uri, module, currentSymbol, ref)
+            end
+        else
+            -- 如果没有找到符号，说明我们的符号定义阶段有问题
+            -- 应该直接报错，而不是静默处理
+            error(string.format("引用分析阶段未找到符号: %s (类型: %s, 位置: %s:%d:%d)", 
+                utils.getNodeName(source) or "unnamed", 
+                source.type,
+                utils.getFileName(uri),
+                source.start and source.start.line or 0,
+                source.start and source.start.character or 0))
+        end
+    end
+    
+    -- 第一阶段只处理符号间的引用关系，不进行类型推断
+    -- 类型推断将在第二阶段(phase2_inference.lua)中处理
+end
+
+-- 分析单个引用
+function analyzeReference(ctx, uri, module, sourceSymbol, refNode)
+    local refType = refNode.type
+    
+    -- 记录正向引用信息到源符号的refs字段
+    table.insert(sourceSymbol.refs, {
+        type = refType,
+        node = refNode,
+        position = utils.getNodePosition(refNode),
+        uri = uri
+    })
+    
+    -- 根据引用类型进行处理
+    if refType == 'getlocal' or refType == 'getglobal' then
+        -- 变量引用 - 建立related关系
+        local refName = utils.getNodeName(refNode)
+        if refName then
+            -- 查找被引用的符号
+            local targetSymbolId, targetSymbol = context.resolveName(ctx, refName, context.findCurrentScope(ctx, refNode))
+            if targetSymbol then
+                -- 如果源符号是变量，建立related关系
+                if sourceSymbol.type == SYMBOL_TYPE.VARIABLE then
+                    table.insert(sourceSymbol.related, targetSymbol.id)
+                    context.debug(ctx, "变量关联: %s -> %s (ID: %s)", sourceSymbol.name, refName, targetSymbol.id)
+                end
+                
+                -- 在目标符号中记录反向引用
+                table.insert(targetSymbol.references, {
+                    type = 'referenced_by',
+                    source_id = sourceSymbol.id,
+                    position = utils.getNodePosition(refNode),
+                    uri = uri
+                })
+            else
+                context.debug(ctx, "未找到引用目标: %s", refName)
+            end
+        end
+    elseif refType == 'getfield' then
+        -- 字段引用
+        local objName = utils.getNodeName(refNode.node)
+        local fieldName = utils.getNodeName(refNode.field)
+        if objName and fieldName then
+            -- 查找对象符号
+            local objSymbolId, objSymbol = context.resolveName(ctx, objName, context.findCurrentScope(ctx, refNode))
+            if objSymbol then
+                -- 使用context.resolveName在对象作用域内查找字段符号
+                local fieldSymbolId, fieldSymbol = context.resolveName(ctx, fieldName, objSymbol)
+                
+                -- 记录字段引用
+                table.insert(sourceSymbol.refs, {
+                    type = 'field_reference',
+                    object_id = objSymbol.id,
+                    field_id = fieldSymbol and fieldSymbol.id or nil,
+                    position = utils.getNodePosition(refNode),
+                    uri = uri
+                })
+                
+                -- 如果找到了字段符号，建立反向引用
+                if fieldSymbol then
+                    table.insert(fieldSymbol.references, {
+                        type = 'field_accessed',
+                        source_id = sourceSymbol.id,
+                        position = utils.getNodePosition(refNode),
+                        uri = uri
+                    })
+                end
+                
+                context.debug(ctx, "字段引用: %s -> %s.%s (字段ID: %s)", 
+                    sourceSymbol.name, objName, fieldName, fieldSymbol and fieldSymbol.id or "未找到")
+            end
+        end
+    elseif refType == 'call' then
+        -- 函数调用引用
+        local funcName = utils.getNodeName(refNode.node)
+        if funcName then
+            -- 查找函数符号
+            local funcSymbolId, funcSymbol = context.resolveName(ctx, funcName, context.findCurrentScope(ctx, refNode))
+            if funcSymbol then
+                table.insert(sourceSymbol.refs, {
+                    type = 'function_call',
+                    function_id = funcSymbol.id,
+                    position = utils.getNodePosition(refNode),
+                    uri = uri
+                })
+                
+                -- 在函数符号中记录反向引用
+                table.insert(funcSymbol.references, {
+                    type = 'called_by',
+                    source_id = sourceSymbol.id,
+                    position = utils.getNodePosition(refNode),
+                    uri = uri
+                })
+                
+                context.debug(ctx, "函数调用: %s -> %s() (函数ID: %s)", 
+                    sourceSymbol.name, funcName, funcSymbol.id)
+            end
+        end
+    end
+end
+
+
+-- 第三遍：整理类型别名，移动定义到真正的类型上
+function consolidateTypeAliases(ctx)
+    -- 只处理通过引用关系找到的类型别名
+    local aliasCount, movedMethods, movedVariables = processReferenceBasedAliases(ctx)
+    
+    print(string.format("    整理了 %d 个类型别名，移动了 %d 个方法和 %d 个变量", 
+        aliasCount, movedMethods, movedVariables))
+end
+
+-- 收集单个class的所有引用变量（递归处理refs）
+function collectClassReferencingVariables(ctx, classSymbol, visited)
+    visited = visited or {}
+    
+    -- 防止循环引用
+    if visited[classSymbol.id] then
+        return {}
+    end
+    visited[classSymbol.id] = true
+    
+    local referencingVariables = {}
+    
+    -- 查找所有引用了这个class的变量
+    -- 通过遍历所有符号，找到那些在possibles中包含这个class的变量
+    for id, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.possibles then
+            -- 检查这个变量是否引用了当前class
+            for _, possible in ipairs(symbol.possibles) do
+                if possible == classSymbol.name then
+                    table.insert(referencingVariables, symbol)
+                    context.debug(ctx, "找到引用class的变量: %s -> %s", symbol.name, classSymbol.name)
+                    break
+                end
+            end
+        end
+    end
+    
+    -- 递归处理：如果找到的变量本身也有refs，继续查找引用这些变量的其他变量
+    local originalVariables = {}
+    for _, var in ipairs(referencingVariables) do
+        table.insert(originalVariables, var)
+    end
+    
+    for _, var in ipairs(originalVariables) do
+        if var.refs and #var.refs > 0 then
+            -- 查找所有引用了这个变量的其他变量
+            for _, ref in ipairs(var.refs) do
+                if ref.type == 'getlocal' or ref.type == 'getglobal' then
+                    local refName = utils.getNodeName(ref.node)
+                    if refName then
+                        local refSymbolId, refSymbol = context.resolveName(ctx, refName, context.findCurrentScope(ctx, ref.node))
+                        if refSymbol and refSymbol.type == SYMBOL_TYPE.VARIABLE then
+                            -- 检查是否已经在列表中
+                            local alreadyExists = false
+                            for _, existingVar in ipairs(referencingVariables) do
+                                if existingVar.id == refSymbol.id then
+                                    alreadyExists = true
+                                    break
+                                end
+                            end
+                            
+                            if not alreadyExists then
+                                table.insert(referencingVariables, refSymbol)
+                                context.debug(ctx, "找到间接引用class的变量: %s -> %s -> %s", 
+                                    refSymbol.name, var.name, classSymbol.name)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    visited[classSymbol.id] = nil
+    return referencingVariables
+end
+
+-- 处理通过引用关系找到的后继符号
+function processReferenceBasedAliases(ctx)
+    local processedCount = 0
+    local movedMethods = 0
+    local movedVariables = 0
+    
+    -- 遍历所有模块
+    for moduleName, module in pairs(ctx.modules) do
+        context.debug(ctx, "处理模块 %s 中的class符号", moduleName)
+        
+        -- 查找模块中的所有class类型符号
+        if module.classes and #module.classes > 0 then
+            for _, classId in ipairs(module.classes) do
+                local classSymbol = ctx.symbols[classId]
+                if classSymbol and classSymbol.type == SYMBOL_TYPE.CLASS then
+                    context.debug(ctx, "处理class: %s (ID: %s)", classSymbol.name, classId)
+                    
+                    -- 收集所有引用这个class的变量（包括递归refs）
+                    local referencingVariables = collectClassReferencingVariables(ctx, classSymbol)
+                    
+                    if #referencingVariables > 0 then
+                        context.debug(ctx, "class %s 被 %d 个变量引用", classSymbol.name, #referencingVariables)
+                        
+                        -- 处理每个引用变量，检查是否有定义需要移动
+                        for _, varSymbol in ipairs(referencingVariables) do
+                            -- 检查变量是否有定义（methods或variables）
+                            local hasDefinitions = (varSymbol.methods and #varSymbol.methods > 0) or
+                                                 (varSymbol.variables and #varSymbol.variables > 0)
+                            
+                            if hasDefinitions then
+                                -- 移动定义到class
+                                if varSymbol.methods and #varSymbol.methods > 0 then
+                                    for _, methodId in ipairs(varSymbol.methods) do
+                                        local method = ctx.symbols[methodId]
+                                        if method then
+                                            table.insert(classSymbol.methods, methodId)
+                                            method.parent = classSymbol
+                                            movedMethods = movedMethods + 1
+                                            
+                                            context.debug(ctx, "移动方法: %s.%s -> %s.%s", 
+                                                varSymbol.name, method.name, classSymbol.name, method.name)
+                                        end
+                                    end
+                                    varSymbol.methods = {}
+                                end
+                                
+                                if varSymbol.variables and #varSymbol.variables > 0 then
+                                    for _, varId in ipairs(varSymbol.variables) do
+                                        local var = ctx.symbols[varId]
+                                        if var then
+                                            table.insert(classSymbol.variables, varId)
+                                            var.parent = classSymbol
+                                            movedVariables = movedVariables + 1
+                                            
+                                            context.debug(ctx, "移动变量: %s.%s -> %s.%s", 
+                                                varSymbol.name, var.name, classSymbol.name, var.name)
+                                        end
+                                    end
+                                    varSymbol.variables = {}
+                                end
+                                
+                                -- 标记变量为别名
+                                varSymbol.isAlias = true
+                                varSymbol.aliasTarget = classSymbol.id
+                                varSymbol.aliasTargetName = classSymbol.name
+                                
+                                processedCount = processedCount + 1
+                                context.debug(ctx, "标记别名: %s -> %s", 
+                                    varSymbol.name, classSymbol.name)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    context.debug(ctx, "处理了 %d 个class别名，移动了 %d 个方法和 %d 个变量", 
+        processedCount, movedMethods, movedVariables)
+    
+    return processedCount, movedMethods, movedVariables
+end
+
+-- 主分析函数 - 三遍处理
 function phase1.analyze(ctx)
+    -- 第一次调用时获取并缓存文件列表
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
     
     print(string.format("  发现 %d 个Lua文件", totalFiles))
     
+    -- 第一遍：建立基本符号定义（同时缓存AST和模块对象）
+    print("  🔍 第一遍：建立符号定义...")
     for i, uri in ipairs(uris) do
         analyzeFileSymbols(ctx, uri)
         
         -- 显示进度
         if i % 10 == 0 or i == totalFiles then
-            print(string.format("  进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
+            print(string.format("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
         end
     end
     
-    -- 后处理：重新关联类方法和静态函数
-    context.debug(ctx, "后处理：重新关联类方法和静态函数")
-    local methodsLinked = 0
-    for funcId, func in pairs(ctx.symbols.functions) do
-        -- 处理类方法（isMethod=true）和静态函数（className存在但isMethod=false）
-        if func.className then
-            local alias = ctx.symbols.aliases[func.className]
-            if alias and alias.type == 'class_definition' then
-                local classSymbol = ctx.symbols.classes[alias.symbolId]
-                if classSymbol then
-                    -- 检查是否已经关联
-                    local alreadyLinked = false
-                    for _, methodId in ipairs(classSymbol.methods) do
-                        if methodId == funcId then
-                            alreadyLinked = true
-                            break
-                        end
-                    end
-                    
-                    if not alreadyLinked then
-                        table.insert(classSymbol.methods, funcId)
-                        methodsLinked = methodsLinked + 1
-                        context.debug(ctx, "重新关联: %s -> %s (%s)", 
-                            func.name, classSymbol.name, func.isMethod and "方法" or "静态函数")
-                    end
-                end
-            end
-        end
-    end
-    context.debug(ctx, "重新关联了 %d 个方法和静态函数", methodsLinked)
+    context.debug(ctx, "第一遍完成，已缓存 %d 个模块对象", utils.tableSize(ctx.uriToModule))
     
-    -- 别名合并处理
-    context.debug(ctx, "开始别名合并处理...")
+    -- 第二遍：建立引用关系（使用缓存的模块对象）
+    print("  🔗 第二遍：建立引用关系...")
+    context.debug(ctx, "使用缓存的文件列表，共 %d 个文件", #ctx.fileList)
     
-    -- 第一步：处理变量别名，将它们转换为类别名（支持多层转换）
-    local maxIterations = 10  -- 防止无限循环
-    local hasChanges = true
-    local iteration = 0
-    
-    while hasChanges and iteration < maxIterations do
-        hasChanges = false
-        iteration = iteration + 1
+    -- 直接使用缓存的文件列表，不需要重新获取
+    for i, uri in ipairs(ctx.fileList) do
+        analyzeFileReferences(ctx, uri)
         
-        for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-            if aliasInfo.type == 'variable_alias' then
-                local targetName = aliasInfo.targetName
-                local targetAlias = ctx.symbols.aliases[targetName]
-                if targetAlias and targetAlias.type == 'class_definition' then
-                    -- 将变量别名转换为类别名
-                    ctx.symbols.aliases[aliasName] = {
-                        type = 'class_definition',
-                        targetClass = targetAlias.targetClass,
-                        symbolId = targetAlias.symbolId
-                    }
-                    context.debug(ctx, "转换变量别名为类别名: %s -> %s (迭代%d)", aliasName, targetAlias.targetClass, iteration)
-                    hasChanges = true
-                end
+        -- 显示进度
+        if i % 10 == 0 or i == totalFiles then
+            print(string.format("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
+        end
+    end
+    
+    -- 调试输出：显示引用关系统计
+    local totalRefs = 0
+    local totalReferences = 0
+    local totalRelated = 0
+    for id, symbol in pairs(ctx.symbols) do
+        if symbol.refs and #symbol.refs > 0 then
+            totalRefs = totalRefs + #symbol.refs
+            context.debug(ctx, "📤 符号 %s (%s) 有 %d 个正向引用", symbol.name, symbol.type, #symbol.refs)
+        end
+        if symbol.references and #symbol.references > 0 then
+            totalReferences = totalReferences + #symbol.references
+            context.debug(ctx, "📥 符号 %s (%s) 有 %d 个反向引用", symbol.name, symbol.type, #symbol.references)
+        end
+        if symbol.related and #symbol.related > 0 then
+            totalRelated = totalRelated + #symbol.related
+            context.debug(ctx, "🔗 符号 %s (%s) 关联了 %d 个其他符号", symbol.name, symbol.type, #symbol.related)
+        end
+    end
+    
+    context.debug(ctx, "📊 引用统计：正向引用 %d 个，反向引用 %d 个，关联关系 %d 个", 
+        totalRefs, totalReferences, totalRelated)
+    print(string.format("    引用统计：正向引用 %d 个，反向引用 %d 个，关联关系 %d 个", 
+        totalRefs, totalReferences, totalRelated))
+    
+    -- 强制输出一些具体的引用信息用于调试
+    if totalRelated > 0 then
+        print("    具体的关联关系:")
+        for id, symbol in pairs(ctx.symbols) do
+            if symbol.related and #symbol.related > 0 then
+                print(string.format("      %s -> %s", symbol.name, table.concat(symbol.related, ", ")))
             end
         end
     end
     
-    -- 第二步：收集所有需要合并的类
-    local mergedClasses = {}
-    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-        if aliasInfo.type == 'class_definition' then
-            local targetClass = aliasInfo.targetClass
-            if not mergedClasses[targetClass] then
-                mergedClasses[targetClass] = {}
-            end
-            table.insert(mergedClasses[targetClass], {
-                name = aliasName,
-                symbolId = aliasInfo.symbolId,
-                info = aliasInfo
-            })
-        end
-    end
-    
-    -- 第三步：执行别名合并
-    local totalMerged = 0
-    for className, aliases in pairs(mergedClasses) do
-        if #aliases > 1 then
-            context.mergeClassAliases(ctx, className)
-            totalMerged = totalMerged + 1
-            context.debug(ctx, "合并类别名: %s (%d个别名)", className, #aliases)
-        end
-    end
-    
-    -- 第四步：重新关联使用别名定义的函数到正确的类
-    for funcId, func in pairs(ctx.symbols.functions) do
-        if func.className then
-            local alias = ctx.symbols.aliases[func.className]
-            if alias and alias.type == 'class_definition' then
-                local targetClassId, targetClassSymbol = context.findGlobalClass(ctx, alias.targetClass)
-                if targetClassSymbol then
-                    -- 检查函数是否已经在目标类的方法列表中
-                    local alreadyLinked = false
-                    for _, methodId in ipairs(targetClassSymbol.methods) do
-                        if methodId == funcId then
-                            alreadyLinked = true
-                            break
-                        end
-                    end
-                    
-                    if not alreadyLinked then
-                        table.insert(targetClassSymbol.methods, funcId)
-                        context.debug(ctx, "重新关联别名函数: %s -> %s", func.name, alias.targetClass)
-                    end
-                end
-            end
-        end
-    end
-    
-    context.debug(ctx, "别名合并完成，共合并了 %d 个类", totalMerged)
+    -- 第三遍：整理类型别名，移动定义到真正的类型上
+    print("  🔄 第三遍：整理类型别名...")
+    consolidateTypeAliases(ctx)
     
     -- 统计信息
-    local moduleCount = utils.tableSize(ctx.symbols.modules)
-    local classCount = utils.tableSize(ctx.symbols.classes)
-    local functionCount = utils.tableSize(ctx.symbols.functions)
-    local variableCount = utils.tableSize(ctx.symbols.variables)
-    local aliasCount = utils.tableSize(ctx.symbols.aliases)
+    local moduleCount = utils.tableSize(ctx.modules)
+    local classCount = utils.tableSize(ctx.classes)
+    local symbolCount = utils.tableSize(ctx.symbols)
     
     print(string.format("  ✅ 符号识别完成:"))
-    print(string.format("     模块: %d, 类: %d, 函数: %d, 变量: %d, 别名: %d", 
-        moduleCount, classCount, functionCount, variableCount, aliasCount))
+    print(string.format("     模块: %d, 类: %d, 符号: %d", 
+        moduleCount, classCount, symbolCount))
 end
 
 return phase1 
