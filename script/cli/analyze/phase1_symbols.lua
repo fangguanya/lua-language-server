@@ -756,7 +756,7 @@ function analyzeNodeReference(ctx, uri, module, sourceNode, refNode)
             local targetSymbolId, targetSymbol = context.resolveName(ctx, refName, context.findCurrentScope(ctx, refNode))
             if targetSymbol then
                 -- 查找源节点对应的符号（可能在父节点中）
-                local sourceSymbol = findSymbolForNode(ctx, sourceNode)
+                local sourceSymbol = context.findSymbolForNode(ctx, sourceNode)
                 if sourceSymbol then
                     -- 如果源符号是变量，建立related关系
                     if sourceSymbol.type == SYMBOL_TYPE.VARIABLE then
@@ -776,27 +776,6 @@ function analyzeNodeReference(ctx, uri, module, sourceNode, refNode)
             end
         end
     end
-end
-
--- 查找AST节点对应的符号（可能在父节点中）
-function findSymbolForNode(ctx, node)
-    -- 首先检查节点本身
-    local symbol = ctx.asts[node]
-    if symbol then
-        return symbol
-    end
-    
-    -- 如果节点本身没有符号，检查父节点
-    local parent = node.parent
-    while parent do
-        symbol = ctx.asts[parent]
-        if symbol then
-            return symbol
-        end
-        parent = parent.parent
-    end
-    
-    return nil
 end
 
 -- 分析单个引用

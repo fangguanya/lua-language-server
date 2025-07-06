@@ -490,4 +490,25 @@ function context.findCurrentMethod(ctx, source)
     return nil
 end
 
+-- 查找AST节点对应的符号（可能在父节点中）
+function context.findSymbolForNode(ctx, node)
+    -- 首先检查节点本身
+    local symbol = ctx.asts[node]
+    if symbol then
+        return symbol
+    end
+    
+    -- 如果节点本身没有符号，检查父节点
+    local parent = node.parent
+    while parent do
+        symbol = ctx.asts[parent]
+        if symbol then
+            return symbol
+        end
+        parent = parent.parent
+    end
+    
+    return nil
+end
+
 return context 
