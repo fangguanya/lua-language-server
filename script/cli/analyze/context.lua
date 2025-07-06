@@ -246,7 +246,9 @@ function context.addModule(ctx, name, filename, uri, ast)
     module = symbol.module.new(id, name, ast)
     context.addSymbol(ctx, module)
     ctx.modules[name] = module
-    ctx.asts[ast] = module
+    if ast then
+        ctx.asts[ast] = module
+    end
     if uri then
         ctx.uriToModule[uri] = module
     end
