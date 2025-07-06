@@ -31,11 +31,8 @@ function analyzer.analyze(rootUri, options)
     print("\n🔍 第一阶段：符号定义识别")
     analyzer.phase1.analyze(ctx)
     
-    -- 临时注释掉后续阶段，只测试第一阶段
-    print("\n⏸️  暂时跳过后续阶段（测试第一阶段重构）")
-    --[[
-    -- 第二阶段：类型推断
-    print("\n🔍 第二阶段：类型推断")
+    -- 第二阶段：类型推断和call信息记录
+    print("\n🔍 第二阶段：类型推断和call信息记录")
     analyzer.phase2.analyze(ctx)
     
     -- 第三阶段：实体关系导出
@@ -45,7 +42,6 @@ function analyzer.analyze(rootUri, options)
     -- 第四阶段：函数调用分析
     print("\n🔍 第四阶段：函数调用分析")
     analyzer.phase4.analyze(ctx)
-    --]]
     
     local endTime = os.clock()
     ctx.statistics.processingTime = endTime - startTime

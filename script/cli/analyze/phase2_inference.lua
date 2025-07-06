@@ -1,479 +1,499 @@
+---
+--- Created by fanggang
+--- DateTime: 2025/7/6 17:27
+---
 -- analyze/phase2_inference.lua
--- 第二阶段：类型推断
+-- 第二阶段：类型推断和call信息记录
 
 local files = require 'files'
 local guide = require 'parser.guide'
 local context = require 'cli.analyze.context'
 local utils = require 'cli.analyze.utils'
+local nodeTracker = require 'cli.analyze.node_tracker'
 
 local phase2 = {}
 
--- 分析函数参数类型
-local function analyzeFunctionParameters(ctx, uri, moduleId, source)
-    if not source.args then return end
-    
-    -- 获取函数名
-    local funcName = utils.getFunctionName(source)
-    if not funcName then return end
-    
-    -- 查找函数调用来推断参数类型
-    local funcId = context.findSymbol(ctx, 'function', function(func)
-        return func.name == funcName and func.module == moduleId
-    end)
-    
-    if not funcId then return end
-    
-    -- 分析每个参数
-    for i, arg in ipairs(source.args) do
-        local paramName = utils.getNodeName(arg)
-        if paramName then
-            local paramId = context.addSymbol(ctx, 'variable', {
-                name = paramName,
-                module = moduleId,
-                uri = uri,
-                position = utils.getNodePosition(arg),
-                scope = utils.getScopeInfo(source),
-                assignmentType = 'parameter',
-                functionId = funcId,
-                parameterIndex = i
-            })
-            
-            -- 添加到待推断列表（需要从调用点推断）
-            table.insert(ctx.types.pending, {
-                name = paramName,
-                module = moduleId,
-                uri = uri,
-                position = utils.getNodePosition(arg),
-                source = arg,
-                type = 'parameter',
-                functionId = funcId,
-                parameterIndex = i
-            })
-        end
-    end
-end
+-- 节点跟踪器
+local tracker1 = nil
+local tracker2 = nil
 
--- 分析函数调用来推断参数类型
-local function analyzeFunctionCall(ctx, uri, moduleId, source)
+-- 记录call信息
+local function recordCallInfo(ctx, uri, moduleId, source)
     local callName = utils.getCallName(source)
-    if not callName then return end
-    
-    -- 查找对应的函数定义
-    local funcId = context.findSymbol(ctx, 'function', function(func)
-        return func.name == callName
-    end)
-    
-    if not funcId then return end
-    
-    -- 分析调用参数
-    if source.args then
-        for i, arg in ipairs(source.args) do
-            local argType = nil
-            local confidence = 0
-            
-            if arg.type == 'getlocal' or arg.type == 'getglobal' then
-                local varName = utils.getNodeName(arg)
-                if varName then
-                    -- 查找变量的推断类型
-                    local varType = ctx.types.inferred[varName]
-                    if varType then
-                        argType = varType.type
-                        confidence = varType.confidence
-                    end
-                end
-            elseif arg.type == 'string' then
-                argType = 'string'
-                confidence = 1.0
-            elseif arg.type == 'number' then
-                argType = 'number'
-                confidence = 1.0
-            end
-            
-            if argType then
-                -- 更新对应参数的类型推断
-                for j, pending in ipairs(ctx.types.pending) do
-                    if pending.type == 'parameter' and 
-                       pending.functionId == funcId and 
-                       pending.parameterIndex == i then
-                        
-                        ctx.types.inferred[pending.name] = {
-                            type = argType,
-                            confidence = confidence,
-                            source = 'function_call'
-                        }
-                        
-                        -- 从待推断列表中移除
-                        table.remove(ctx.types.pending, j)
-                        break
-                    end
-                end
-            end
-        end
-    end
-end
-
--- 从值推断类型
-local function inferTypeFromValue(ctx, value)
-    local inferredType = nil
-    local confidence = 0
-    
-    if value.type == 'call' then
-        local callName = utils.getCallName(value)
-        
-        -- 检查是否是构造函数调用 - 支持 AAA:new() 和 AAA.new() 两种格式
-        if callName and (callName:find(':new') or callName:find('%.new')) then
-            local className = nil
-            if callName:find(':new') then
-                className = callName:match('([^:]+):new')
-            elseif callName:find('%.new') then
-                className = callName:match('([^.]+)%.new')
-            end
-            
-            if className then
-                -- 查找类别名
-                local alias = ctx.symbols.aliases[className]
-                if alias and alias.type == 'class_definition' then
-                    inferredType = alias.targetClass
-                    confidence = 0.9
-                else
-                    inferredType = className
-                    confidence = 0.7
-                end
-            end
-        elseif utils.isRequireFunction(callName, ctx.config.requireFunctions) then
-            -- require调用
-            local modulePath = utils.getRequireModulePath(value)
-            if modulePath then
-                inferredType = 'module:' .. modulePath
-                confidence = 0.8
-            end
-        end
-    elseif value.type == 'string' then
-        inferredType = 'string'
-        confidence = 1.0
-    elseif value.type == 'number' then
-        inferredType = 'number'
-        confidence = 1.0
-    elseif value.type == 'boolean' then
-        inferredType = 'boolean'
-        confidence = 1.0
-    elseif value.type == 'table' then
-        inferredType = 'table'
-        confidence = 0.8
-    elseif value.type == 'getlocal' or value.type == 'getglobal' then
-        -- 变量引用
-        local refName = utils.getNodeName(value)
-        if refName then
-            -- 查找引用变量的类型
-            local refType = ctx.types.inferred[refName]
-            if refType then
-                inferredType = refType.type
-                confidence = refType.confidence * 0.8
-            end
-        end
-    end
-    
-    return inferredType, confidence
-end
-
--- 记录类型推断结果
-local function recordTypeInference(ctx, uri, moduleId, varName, varNode, inferredType, confidence, source)
-    local position = utils.getNodePosition(varNode)
-    local varId = context.addSymbol(ctx, 'variable', {
-        name = varName,
-        module = moduleId,
-        uri = uri,
-        position = position,
-        scope = utils.getScopeInfo(varNode),
-        assignmentType = source,
-        inferredType = inferredType,
-        confidence = confidence
-    })
-    
-    -- 添加到类型推断结果
-    ctx.types.inferred[varId] = {
-        type = inferredType,
-        confidence = confidence,
-        source = source
-    }
-    
-    context.debug(ctx, "类型推断: %s -> %s (%.1f)", varName, inferredType, confidence)
-end
-
--- 分析构造函数参数类型
-local function analyzeConstructorArguments(ctx, uri, moduleId, callSource, className, targetType)
-    if not callSource.args then
-        return
-    end
-    
-    print(string.format("  📋 分析构造函数参数: %s (参数个数: %d)", className, #callSource.args))
-    
-    for i, arg in ipairs(callSource.args) do
-        local argType, confidence = inferTypeFromValue(ctx, arg)
-        print(string.format("    参数[%d]: %s (置信度: %.1f)", i, argType, confidence))
-        
-        -- 记录参数类型推断结果
-        local argId = context.addSymbol(ctx, 'variable', {
-            name = string.format("%s_arg_%d", className, i),
-            module = moduleId,
-            uri = uri,
-            position = utils.getNodePosition(arg),
-            scope = 'constructor_argument',
-            parameterIndex = i,
-            parentConstructor = className,
-            inferredType = argType,
-            confidence = confidence
-        })
-        
-        -- 添加到类型推断结果
-        ctx.types.inferred[argId] = {
-            type = argType,
-            confidence = confidence,
-            source = 'constructor_argument'
-        }
-    end
-end
-
--- 分析构造函数调用，检查是否用于局部变量赋值
-local function analyzeConstructorCall(ctx, uri, moduleId, callSource, callName)
-    -- 向上查找父节点，直到找到local节点或到达根节点
-    local current = callSource
-    local depth = 0
-    local maxDepth = 5  -- 限制查找深度
-    
-    while current and current.parent and depth < maxDepth do
-        current = current.parent
-        depth = depth + 1
-        
-        print(string.format("  父节点[%d]: %s", depth, current.type))
-        
-        -- 如果找到local节点，说明这是局部变量声明
-        if current.type == 'local' then
-            -- 查找变量名
-            local varName = nil
-            if current[1] then
-                varName = current[1]
-            end
-            
-            print(string.format("  ✅ 找到局部变量赋值: %s = %s", varName or "unknown", callName))
-            
-            if varName then
-                -- 进行类型推断 - 支持 AAA:new() 和 AAA.new() 两种格式
-                local className = nil
-                if callName:find(':new') then
-                    className = callName:match('([^:]+):new')
-                elseif callName:find('%.new') then
-                    className = callName:match('([^.]+)%.new')
-                end
-                
-                if className then
-                    local inferredType = nil
-                    local confidence = 0
-                    
-                    -- 查找类别名
-                    local alias = ctx.symbols.aliases[className]
-                    if alias and alias.type == 'class_definition' then
-                        inferredType = alias.targetClass
-                        confidence = 0.9
-                    else
-                        inferredType = className
-                        confidence = 0.7
-                    end
-                    
-                    print(string.format("  🎯 类型推断: %s -> %s (%.1f)", varName, inferredType, confidence))
-                    
-                    -- 记录类型推断结果
-                    recordTypeInference(ctx, uri, moduleId, varName, current, inferredType, confidence, 'constructor_call')
-                    
-                    -- 分析构造函数参数类型
-                    analyzeConstructorArguments(ctx, uri, moduleId, callSource, className, inferredType)
-                    
-                    return  -- 找到后退出
-                end
-            end
-        end
-    end
-    
-    print(string.format("  ❌ 未找到对应的局部变量声明 (深度: %d)", depth))
-end
-
--- 分析文件中的类型推断
-local function analyzeFileTypes(ctx, uri)
-    local state = files.getState(uri)
-    if not state or not state.ast then
-        return
-    end
-    
-    local moduleId = utils.getModulePath(uri, ctx.rootUri)
-    context.debug(ctx, "分析文件类型推断: %s", moduleId)
-    
-    -- 新策略：查找构造函数调用，然后检查其是否用于局部变量赋值
-    guide.eachSource(state.ast, function(source)
-        if source.type == 'call' then
-            local callName = utils.getCallName(source)
-            if callName and (callName:find(':new') or callName:find('%.new')) then
-                print(string.format("🔍 找到构造函数调用: %s", callName))
-                -- 检查这个调用是否是局部变量赋值的值
-                analyzeConstructorCall(ctx, uri, moduleId, source, callName)
-            end
-        elseif source.type == 'function' then
-            -- 处理函数参数
-            analyzeFunctionParameters(ctx, uri, moduleId, source)
-        end
-    end)
-end
-
--- 分析函数调用，通过调用时的参数类型推断函数定义的参数类型
-local function analyzeFunctionCallForParameterInference(ctx, uri, moduleId, callSource)
-    local callName = utils.getCallName(callSource)
     if not callName then
         return
     end
     
-    -- 跳过构造函数调用
-    if callName:find(':new') or callName:find('%.new') then
-        return
+    local position = utils.getNodePosition(source)
+    
+    -- 查找调用者的符号ID
+    local sourceSymbolId = nil
+    local currentScope = context.findCurrentScope(ctx, source)
+    local currentMethod = context.findCurrentMethod(ctx, source)
+    
+    if currentMethod then
+        sourceSymbolId = currentMethod.id
+    elseif currentScope then
+        sourceSymbolId = currentScope.id
     end
     
-    context.debug(ctx, "🔍 分析函数调用: %s", callName)
+    -- 查找目标函数的符号ID
+    local targetSymbolId, targetSymbol = context.findFunctionSymbol(ctx, callName)
     
-    -- 查找对应的函数定义，考虑别名情况
-    local funcSymbol = nil
-    for funcId, func in pairs(ctx.symbols.functions) do
-        if func.name == callName then
-            funcSymbol = func
-            context.debug(ctx, "✅ 直接匹配到函数: %s", func.name)
-            break
+    -- 如果直接查找失败，尝试通过别名查找
+    if not targetSymbolId then
+        local className, methodName = callName:match('([^.]+)%.(.+)')
+        if className and methodName then
+            -- 查找类别名（从第1阶段的符号表中查找）
+            local classId, classSymbol = context.findSymbol(ctx, function(symbol)
+                return symbol.type == SYMBOL_TYPE.CLASS and symbol.name == className
+            end)
+            
+            if classSymbol then
+                local realFuncName = classSymbol.name .. '.' .. methodName
+                targetSymbolId, targetSymbol = context.findFunctionSymbol(ctx, realFuncName)
+            end
         end
     end
     
-    -- 如果直接匹配失败，尝试通过别名匹配
-    if not funcSymbol then
-        -- 解析调用名称，如 GM.SimulateBattle -> GameManager.SimulateBattle
-        local className, methodName = callName:match('([^.]+)%.(.+)')
-        if className and methodName then
-            context.debug(ctx, "🔍 解析调用名称: %s.%s", className, methodName)
-            -- 查找类别名
-            local alias = ctx.symbols.aliases[className]
-            if alias and alias.type == 'class_definition' then
-                local realClassName = alias.targetClass
-                local realFuncName = realClassName .. '.' .. methodName
-                context.debug(ctx, "🔍 通过别名查找: %s -> %s", callName, realFuncName)
+    -- 分析参数信息
+    local parameters = {}
+    if source.args then
+        for i, arg in ipairs(source.args) do
+            local param = {
+                index = i,
+                type = nil,
+                symbolId = nil,
+                value = nil
+            }
+            
+            -- 分析参数类型
+            if arg.type == 'getlocal' or arg.type == 'getglobal' then
+                param.type = 'variable_reference'
+                local varName = utils.getNodeName(arg)
+                if varName then
+                    param.symbolId, _ = context.findVariableSymbol(ctx, varName, currentScope)
+                    param.value = varName
+                end
+            elseif arg.type == 'string' then
+                param.type = 'string_literal'
+                param.value = arg[1]
+            elseif arg.type == 'number' then
+                param.type = 'number_literal'
+                param.value = arg[1]
+            elseif arg.type == 'boolean' then
+                param.type = 'boolean_literal'
+                param.value = arg[1]
+            elseif arg.type == 'table' then
+                param.type = 'table_literal'
+                param.value = 'table'
+            elseif arg.type == 'call' then
+                param.type = 'function_call'
+                param.value = utils.getCallName(arg)
+            else
+                param.type = 'other'
+                param.value = arg.type
+            end
+            
+            table.insert(parameters, param)
+        end
+    end
+    
+    -- 创建call信息记录
+    local callInfo = {
+        callName = callName,
+        sourceSymbolId = sourceSymbolId,
+        targetSymbolId = targetSymbolId,
+        parameters = parameters,
+        location = {
+            uri = uri,
+            module = moduleId,
+            line = position.line,
+            column = position.column
+        },
+        timestamp = os.time()
+    }
+    
+    -- 添加到context中
+    context.addCallInfo(ctx, callInfo)
+    
+    context.debug(ctx, "📞 记录call信息: %s (源: %s, 目标: %s, 参数: %d)", 
+        callName, sourceSymbolId or "nil", targetSymbolId or "nil", #parameters)
+end
+
+-- 第1轮操作：遍历所有AST，记录call信息
+local function recordAllCallInfos(ctx)
+    local uris = context.getFiles(ctx)
+    local totalFiles = #uris
+    
+    print(string.format("  📞 第1轮操作：遍历所有AST，记录call信息"))
+    print(string.format("    发现 %d 个Lua文件", totalFiles))
+    
+    -- 初始化节点跟踪器
+    if ctx.config.enableNodeTracking then
+        tracker1 = nodeTracker.new("phase2_round1")
+    end
+    
+    for i, uri in ipairs(uris) do
+        -- 从context中获取模块信息，而不是重新读取文件
+        local module = ctx.uriToModule[uri]
+        if module and module.ast then
+            local moduleId = utils.getModulePath(uri, ctx.rootUri)
+            
+            -- 遍历所有调用节点
+            guide.eachSource(module.ast, function(source)
+                -- 记录节点处理
+                if tracker1 then
+                    nodeTracker.recordNode(tracker1, source)
+                end
                 
-                -- 重新查找函数定义
-                for funcId, func in pairs(ctx.symbols.functions) do
-                    if func.name == realFuncName then
-                        funcSymbol = func
-                        context.debug(ctx, "✅ 通过别名匹配到函数: %s", func.name)
-                        break
+                if source.type == 'call' then
+                    recordCallInfo(ctx, uri, moduleId, source)
+                end
+            end)
+        end
+        
+        -- 显示进度
+        if i % 10 == 0 or i == totalFiles then
+            print(string.format("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
+        end
+    end
+    
+    print(string.format("  ✅ call信息记录完成: 总计 %d 个调用", ctx.calls.callStatistics.totalCalls))
+    print(string.format("    已解析: %d, 未解析: %d", 
+        ctx.calls.callStatistics.resolvedCalls, ctx.calls.callStatistics.unresolvedCalls))
+end
+
+-- 添加类型到possibles数组，确保去重和别名处理
+local function addTypeToPossibles(ctx, symbol, newType)
+    if not symbol.possibles then
+        symbol.possibles = {}
+    end
+    
+    -- 如果新类型为空，直接返回
+    if not newType or newType == "" then
+        return false
+    end
+    
+    -- 解析别名，获取最终类型
+    local finalType = newType
+    if ctx.symbols.aliases then
+        for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+            if aliasName == newType then
+                finalType = aliasInfo.targetName or aliasInfo.target or newType
+                break
+            end
+        end
+    end
+    
+    -- 检查是否已存在（包括原类型和最终类型）
+    for _, existingType in pairs(symbol.possibles) do
+        if existingType == newType or existingType == finalType then
+            return false -- 已存在，不添加
+        end
+    end
+    
+    -- 添加最终类型
+    table.insert(symbol.possibles, finalType)
+    return true
+end
+
+-- 基于reference关系进行类型传播
+local function propagateTypesThroughReferences(ctx)
+    local changes = true
+    local iterations = 0
+    local maxIterations = 10
+    
+    context.debug(ctx, "🔄 开始基于reference关系的类型传播")
+    
+    while changes and iterations < maxIterations do
+        changes = false
+        iterations = iterations + 1
+        
+        context.debug(ctx, "  第%d轮类型传播", iterations)
+        
+        -- 遍历所有符号的引用关系
+        for symbolId, symbol in pairs(ctx.symbols) do
+            if symbol.refs and next(symbol.refs) then
+                for refId, _ in pairs(symbol.refs) do
+                    local refSymbol = ctx.symbols[refId]
+                    if refSymbol then
+                        -- 双向类型传播
+                        -- 1. 从refSymbol传播到symbol
+                        if refSymbol.possibles and next(refSymbol.possibles) then
+                            for _, possibleType in pairs(refSymbol.possibles) do
+                                if addTypeToPossibles(ctx, symbol, possibleType) then
+                                    changes = true
+                                end
+                            end
+                        elseif refSymbol.inferredType then
+                            -- 兼容旧的inferredType字段
+                            if addTypeToPossibles(ctx, symbol, refSymbol.inferredType) then
+                                changes = true
+                            end
+                        end
+                        
+                        -- 2. 从symbol传播到refSymbol
+                        if symbol.possibles and next(symbol.possibles) then
+                            for _, possibleType in pairs(symbol.possibles) do
+                                if addTypeToPossibles(ctx, refSymbol, possibleType) then
+                                    changes = true
+                                end
+                            end
+                        elseif symbol.inferredType then
+                            -- 兼容旧的inferredType字段
+                            if addTypeToPossibles(ctx, refSymbol, symbol.inferredType) then
+                                changes = true
+                            end
+                        end
                     end
                 end
             end
         end
     end
     
-    if not funcSymbol then
-        context.debug(ctx, "❌ 未找到函数定义: %s", callName)
+    context.debug(ctx, "✅ 类型传播完成，共%d轮迭代", iterations)
+end
+
+-- 基于call信息进行类型推断
+local function inferTypesFromCalls(ctx)
+    local inferredCount = 0
+    
+    context.debug(ctx, "🔄 开始基于call信息的类型推断")
+    
+    if not ctx.calls then
+        context.debug(ctx, "❌ 没有找到call信息")
         return
     end
     
-    if not callSource.args then
-        context.debug(ctx, "❌ 函数调用没有参数: %s", callName)
-        return
-    end
-    
-    context.debug(ctx, "📋 分析函数参数: %s (参数个数: %d)", funcSymbol.name, #callSource.args)
-    
-    -- 分析每个参数
-    for i, arg in ipairs(callSource.args) do
-        local argType, confidence = inferTypeFromValue(ctx, arg)
-        context.debug(ctx, "  参数[%d]: %s (置信度: %.1f)", i, argType or "nil", confidence or 0.0)
-        
-        if argType and funcSymbol.params and funcSymbol.params[i] then
-            local paramName = funcSymbol.params[i].name
-            context.debug(ctx, "  匹配参数: %s -> %s", paramName, argType)
-            
-            -- 创建参数类型推断记录
-            local paramId = string.format("%s_param_%d", funcSymbol.name, i)
-            
-            -- 记录参数类型推断结果
-            local varId = context.addSymbol(ctx, 'variable', {
-                name = paramName,
-                module = moduleId,
-                uri = uri,
-                position = funcSymbol.params[i].position,
-                scope = 'function_parameter',
-                functionId = funcSymbol.id or funcSymbol.name,
-                parameterIndex = i,
-                inferredType = argType,
-                confidence = confidence
-            })
-            
-            -- 添加到类型推断结果
-            ctx.types.inferred[varId] = {
-                type = argType,
-                confidence = confidence,
-                source = 'function_call_inference'
-            }
-            
-            context.debug(ctx, "✅ 函数参数类型推断: %s.%s -> %s (%.1f)", funcSymbol.name, paramName, argType, confidence)
-        else
-            if not argType then
-                context.debug(ctx, "  ❌ 无法推断参数[%d]类型", i)
-            elseif not funcSymbol.params then
-                context.debug(ctx, "  ❌ 函数没有参数定义")
-            elseif not funcSymbol.params[i] then
-                context.debug(ctx, "  ❌ 函数参数[%d]不存在", i)
+    for _, callInfo in pairs(ctx.calls) do
+        if callInfo.method then
+            -- 通过方法调用推断类型
+            local sourceSymbol = ctx.symbols[callInfo.source_symbolid]
+            if sourceSymbol then
+                local inferredType = nil
+                
+                -- 查找拥有该方法的类
+                for className, classSymbol in pairs(ctx.classes) do
+                    if classSymbol.methods then
+                        for methodName, _ in pairs(classSymbol.methods) do
+                            if methodName == callInfo.method then
+                                inferredType = className
+                                break
+                            end
+                        end
+                    end
+                    if inferredType then break end
+                end
+                
+                if inferredType then
+                    if addTypeToPossibles(ctx, sourceSymbol, inferredType) then
+                        context.debug(ctx, "    通过方法推断类型: %s -> %s (方法: %s)", 
+                            sourceSymbol.name or "unknown", inferredType, callInfo.method)
+                        inferredCount = inferredCount + 1
+                    end
+                end
             end
         end
     end
+    
+    context.debug(ctx, "✅ 基于call信息的类型推断完成，推断了%d个类型", inferredCount)
 end
 
--- 主分析函数
-function phase2.analyze(ctx)
-    local uris = context.getFiles(ctx)
-    local totalFiles = #uris
+-- 建立类型间关系
+local function buildTypeRelations(ctx)
+    local relationCount = 0
     
-    print(string.format("  发现 %d 个Lua文件", totalFiles))
+    context.debug(ctx, "🔄 开始建立类型间关系")
     
-    -- 第一遍：分析局部变量和函数参数
-    for i, uri in ipairs(uris) do
-        analyzeFileTypes(ctx, uri)
-        
-        -- 显示进度
-        if i % 10 == 0 or i == totalFiles then
-            print(string.format("  进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
-        end
+    if not ctx.relations then
+        ctx.relations = {}
     end
     
-    -- 第二遍：分析函数调用来推断参数类型
-    for i, uri in ipairs(uris) do
-        local state = files.getState(uri)
-        if state and state.ast then
-            local moduleId = utils.getModulePath(uri, ctx.rootUri)
-            guide.eachSource(state.ast, function(source)
-                if source.type == 'call' then
-                    analyzeFunctionCall(ctx, uri, moduleId, source)
-                    -- 新增：分析普通函数调用的参数类型推断
-                    analyzeFunctionCallForParameterInference(ctx, uri, moduleId, source)
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.possibles and next(symbol.possibles) then
+            for _, possibleType in pairs(symbol.possibles) do
+                -- 解析别名，获取最终类型
+                local finalType = possibleType
+                local aliasTarget = nil
+                
+                if ctx.symbols.aliases then
+                    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+                        if aliasName == possibleType then
+                            finalType = aliasInfo.targetName or aliasInfo.target or possibleType
+                            aliasTarget = finalType
+                            break
+                        end
+                    end
                 end
-            end)
+                
+                -- 建立类型关系
+                local relation = {
+                    type = "type_relation",
+                    from = symbol.name or symbolId,
+                    to = finalType,
+                    aliasTarget = aliasTarget
+                }
+                
+                table.insert(ctx.relations, relation)
+                relationCount = relationCount + 1
+                
+                context.debug(ctx, "    建立类型关系: %s -> %s (别名: %s)", 
+                    relation.from, relation.to, aliasTarget or "nil")
+            end
         end
     end
     
-    -- 统计信息
-    local inferredCount = utils.tableSize(ctx.types.inferred)
-    local pendingCount = #ctx.types.pending
-    local totalCount = inferredCount + pendingCount
+    context.debug(ctx, "✅ 类型间关系建立完成，共%d个关系", relationCount)
+    return relationCount
+end
+
+-- 建立函数间调用关系
+local function buildFunctionCallRelations(ctx)
+    context.debug(ctx, "🔄 开始建立函数间调用关系")
     
-    ctx.types.statistics.total = totalCount
-    ctx.types.statistics.inferred = inferredCount
-    ctx.types.statistics.pending = pendingCount
+    local functionRelationCount = 0
     
-    print(string.format("  ✅ 类型推断完成:"))
-    print(string.format("     总计: %d, 已推断: %d, 待推断: %d (成功率: %.1f%%)", 
-        totalCount, inferredCount, pendingCount, 
-        totalCount > 0 and (inferredCount / totalCount * 100) or 0))
+    -- 基于call信息建立函数调用关系
+    for _, callInfo in ipairs(ctx.calls.callInfos) do
+        if callInfo.sourceSymbolId and callInfo.targetSymbolId then
+            local sourceSymbol = ctx.symbols[callInfo.sourceSymbolId]
+            local targetSymbol = ctx.symbols[callInfo.targetSymbolId]
+            
+            if sourceSymbol and targetSymbol then
+                -- 创建函数调用关系
+                local relationId = context.addRelation(ctx, 'function_call', 
+                    callInfo.sourceSymbolId, callInfo.targetSymbolId, {
+                    relationship = 'function_invocation',
+                    fromName = sourceSymbol.aliasTargetName or sourceSymbol.name,  -- 使用最终名称
+                    toName = targetSymbol.aliasTargetName or targetSymbol.name,    -- 使用最终名称
+                    callName = callInfo.callName,
+                    parameterCount = #(callInfo.parameters or {}),
+                    parameterTypes = {},
+                    sourceLocation = {
+                        uri = callInfo.location.uri,
+                        module = callInfo.location.module,
+                        line = callInfo.location.line,
+                        column = callInfo.location.column
+                    }
+                })
+                
+                -- 记录参数类型信息
+                local relation = ctx.relations[#ctx.relations]  -- 刚添加的关系
+                if callInfo.parameters then
+                    for i, param in ipairs(callInfo.parameters) do
+                        if param.symbolId then
+                            local paramSymbol = ctx.symbols[param.symbolId]
+                            if paramSymbol then
+                                relation.metadata.parameterTypes[i] = {
+                                    type = param.type,
+                                    inferredType = paramSymbol.inferredType,
+                                    aliasTargetName = paramSymbol.aliasTargetName or paramSymbol.name
+                                }
+                            end
+                        else
+                            relation.metadata.parameterTypes[i] = {
+                                type = param.type,
+                                value = param.value
+                            }
+                        end
+                    end
+                end
+                
+                functionRelationCount = functionRelationCount + 1
+                context.debug(ctx, "    建立函数关系: %s -> %s (调用: %s)", 
+                    sourceSymbol.aliasTargetName or sourceSymbol.name, 
+                    targetSymbol.aliasTargetName or targetSymbol.name, 
+                    callInfo.callName)
+            end
+        end
+    end
+    
+    context.debug(ctx, "✅ 函数间调用关系建立完成，共%d个关系", functionRelationCount)
+    return functionRelationCount
+end
+
+-- 建立引用关系
+local function buildReferenceRelations(ctx)
+    context.debug(ctx, "🔄 开始建立引用关系")
+    
+    local referenceRelationCount = 0
+    
+    -- 基于reference关系建立关系
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.refs and next(symbol.refs) then
+            for refId, _ in pairs(symbol.refs) do
+                local refSymbol = ctx.symbols[refId]
+                if refSymbol and symbolId ~= refId then
+                    -- 创建引用关系
+                    local relationId = context.addRelation(ctx, 'reference', symbolId, refId, {
+                        relationship = 'symbol_reference',
+                        fromName = symbol.aliasTargetName or symbol.name,  -- 使用最终名称
+                        toName = refSymbol.aliasTargetName or refSymbol.name,  -- 使用最终名称
+                        sourceLocation = {
+                            line = symbol.position and symbol.position.line or 0,
+                            column = symbol.position and symbol.position.column or 0
+                        }
+                    })
+                    
+                    referenceRelationCount = referenceRelationCount + 1
+                    context.debug(ctx, "    建立引用关系: %s -> %s", 
+                        symbol.aliasTargetName or symbol.name, 
+                        refSymbol.aliasTargetName or refSymbol.name)
+                end
+            end
+        end
+    end
+    
+    context.debug(ctx, "✅ 引用关系建立完成，共%d个关系", referenceRelationCount)
+    return referenceRelationCount
+end
+
+-- 第2轮操作：数据流分析
+local function performDataFlowAnalysis(ctx)
+    print(string.format("  🔄 第2轮操作：数据流分析"))
+    
+    -- 初始化节点跟踪器
+    if ctx.config.enableNodeTracking then
+        tracker2 = nodeTracker.new("phase2_round2")
+    end
+    
+    -- 1. 基于reference和related关系进行类型传播
+    propagateTypesThroughReferences(ctx)
+    
+    -- 2. 基于call信息进行类型推断
+    inferTypesFromCalls(ctx)
+    
+    -- 3. 建立不同类型的关系
+    local typeRelationCount = buildTypeRelations(ctx)
+    local functionRelationCount = buildFunctionCallRelations(ctx)
+    local referenceRelationCount = buildReferenceRelations(ctx)
+    
+    print(string.format("  ✅ 数据流分析完成:"))
+    print(string.format("    类型关系: %d", typeRelationCount))
+    print(string.format("    函数关系: %d", functionRelationCount))
+    print(string.format("    引用关系: %d", referenceRelationCount))
+    print(string.format("    总关系数: %d", ctx.statistics.totalRelations))
+end
+
+-- 第二阶段：类型推断和数据流分析
+function phase2.analyze(ctx)
+    print("🔄 开始第二阶段：类型推断和数据流分析")
+    
+    -- 第1轮操作：遍历AST记录call信息
+    recordAllCallInfos(ctx)
+    
+    -- 第2轮操作：数据流分析
+    performDataFlowAnalysis(ctx)
+    
+    -- 打印节点跟踪统计
+    if ctx.config.enableNodeTracking then
+        if tracker2 then
+            tracker2:printStatistics()
+        end
+    end
+    
+    print("✅ 第二阶段完成")
 end
 
 return phase2 

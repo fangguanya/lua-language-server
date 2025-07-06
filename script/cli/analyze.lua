@@ -60,8 +60,10 @@ function export.runCLI()
         
         -- 创建分析选项
         local dbg = _G['ANALYZE_DEBUG']
+        local nodeTracking = _G['ANALYZE_NODE_TRACKING']
         local options = {
-            debug = dbg == true or dbg == "true" or dbg == "1"
+            debug = dbg == true or dbg == "true" or dbg == "1",
+            enableNodeTracking = nodeTracking == true or nodeTracking == "true" or nodeTracking == "1"
         }
         
         -- 运行分析

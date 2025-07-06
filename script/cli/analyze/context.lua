@@ -46,10 +46,18 @@ function context.new(rootUri, options)
         entities = {},              -- 导出的实体列表
         relations = {},             -- 导出的关系列表
         
-        -- 调用关系 (Phase 4)
+        -- 调用关系 (Phase 2 & 4)
         calls = {
             functions = {},         -- 函数间调用关系
             types = {},             -- 类型间调用关系
+            -- 第2阶段：Call信息记录
+            callInfos = {},         -- 详细的调用信息列表
+            callStatistics = {
+                totalCalls = 0,
+                resolvedCalls = 0,
+                unresolvedCalls = 0,
+                parameterTypes = {}
+            }
         },
         
         -- 统计信息
@@ -81,7 +89,9 @@ function context.new(rootUri, options)
             -- 目录过滤模式（支持通配符）
             excludePatterns = {
             },
-            debugMode = options and options.debug or false
+            debugMode = options and options.debug or false,
+            -- 节点处理跟踪（用于调试重复处理问题）
+            enableNodeTracking = options and options.enableNodeTracking or false
         }
     }
     -- 不再使用applyMethods，避免函数引用导致JSON序列化问题
@@ -410,16 +420,42 @@ local function deepClean(obj, visited)
         visited[obj] = true
         
         local cleaned = {}
+        local hasStringKeys = false
+        local hasNumberKeys = false
+        
+        -- 先检查键类型，避免混合键类型
         for key, value in pairs(obj) do
-            local cleanKey = deepClean(key, visited)
-            local cleanValue = deepClean(value, visited)
-            if cleanKey ~= nil then
-                -- 对于空表也要保留（如空的references或refs数组）
-                if cleanValue ~= nil or (type(value) == 'table' and next(value) == nil) then
-                    cleaned[cleanKey] = cleanValue or {}
+            local keyType = type(key)
+            if keyType == 'string' then
+                hasStringKeys = true
+            elseif keyType == 'number' then
+                hasNumberKeys = true
+            end
+        end
+        
+        -- 如果有混合键类型，只保留字符串键
+        for key, value in pairs(obj) do
+            local keyType = type(key)
+            local shouldInclude = true
+            
+            -- 如果有混合键类型，优先保留字符串键
+            if hasStringKeys and hasNumberKeys then
+                shouldInclude = (keyType == 'string')
+            end
+            
+            if shouldInclude then
+                local cleanKey = deepClean(key, visited)
+                local cleanValue = deepClean(value, visited)
+                
+                if cleanKey ~= nil then
+                    -- 对于空表也要保留（如空的references或refs数组）
+                    if cleanValue ~= nil or (type(value) == 'table' and next(value) == nil) then
+                        cleaned[cleanKey] = cleanValue or {}
+                    end
                 end
             end
         end
+        
         return cleaned
     end
     
@@ -509,6 +545,65 @@ function context.findSymbolForNode(ctx, node)
     end
     
     return nil
+end
+
+-- 添加call信息记录
+function context.addCallInfo(ctx, callInfo)
+    local id = context.generateId(ctx, 'call')
+    callInfo.id = id
+    table.insert(ctx.calls.callInfos, callInfo)
+    ctx.calls.callStatistics.totalCalls = ctx.calls.callStatistics.totalCalls + 1
+    
+    -- 更新统计信息
+    if callInfo.targetSymbolId then
+        ctx.calls.callStatistics.resolvedCalls = ctx.calls.callStatistics.resolvedCalls + 1
+    else
+        ctx.calls.callStatistics.unresolvedCalls = ctx.calls.callStatistics.unresolvedCalls + 1
+    end
+    
+    -- 统计参数类型
+    if callInfo.parameters then
+        for _, param in ipairs(callInfo.parameters) do
+            if param.type then
+                ctx.calls.callStatistics.parameterTypes[param.type] = 
+                    (ctx.calls.callStatistics.parameterTypes[param.type] or 0) + 1
+            end
+        end
+    end
+    
+    return id
+end
+
+-- 查找函数符号
+function context.findFunctionSymbol(ctx, name)
+    for id, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.METHOD and symbol.name == name then
+            return id, symbol
+        end
+    end
+    return nil, nil
+end
+
+-- 查找变量符号
+function context.findVariableSymbol(ctx, name, scope)
+    -- 首先在指定作用域查找
+    if scope then
+        for _, varId in ipairs(scope.variables or {}) do
+            local var = ctx.symbols[varId]
+            if var and var.name == name then
+                return varId, var
+            end
+        end
+    end
+    
+    -- 在全局范围查找
+    for id, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == name then
+            return id, symbol
+        end
+    end
+    
+    return nil, nil
 end
 
 return context 

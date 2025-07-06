@@ -1,3 +1,7 @@
+---
+--- Created by fanggang
+--- DateTime: 2025/7/6 17:27
+---
 -- analyze/phase4_calls.lua
 -- 第四阶段：函数调用关系分析
 
@@ -6,300 +10,283 @@ local guide = require 'parser.guide'
 local context = require 'cli.analyze.context'
 local utils = require 'cli.analyze.utils'
 local furi = require 'file-uri'
+local nodeTracker = require 'cli.analyze.node_tracker'
+local symbol = require 'cli.analyze.symbol'
 
 local phase4 = {}
 
--- 分析函数调用
-local function analyzeFunctionCall(ctx, uri, moduleId, source)
-    local callName = utils.getCallName(source)
-    if not callName then return end
+-- 节点跟踪器
+local tracker4 = nil
+
+-- 解析别名调用名称
+local function resolveAliasedCallName(ctx, callName)
+    if not ctx.symbols.aliases then
+        return callName
+    end
     
-    -- 应用别名关系处理，将调用名称转换为真实名称
-    local resolvedCallName = callName
     for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-        if aliasInfo.type == "class_definition" then
-            local targetClassName = aliasInfo.targetClass
+        if aliasInfo.type == "class_alias" then
+            local targetClassName = aliasInfo.targetName
             
             -- 处理静态函数调用 (aliasName.functionName -> targetClassName.functionName)
             local aliasPrefix = aliasName .. "."
             if callName:sub(1, #aliasPrefix) == aliasPrefix then
                 local functionName = callName:sub(#aliasPrefix + 1)
-                resolvedCallName = targetClassName .. "." .. functionName
-                break
+                return targetClassName .. "." .. functionName
             end
             
             -- 处理方法调用 (aliasName:methodName -> targetClassName:methodName)
             local aliasMethodPrefix = aliasName .. ":"
             if callName:sub(1, #aliasMethodPrefix) == aliasMethodPrefix then
                 local methodName = callName:sub(#aliasMethodPrefix + 1)
-                resolvedCallName = targetClassName .. ":" .. methodName
-                break
+                return targetClassName .. ":" .. methodName
             end
         end
     end
     
-    local position = utils.getNodePosition(source)
-    local filePath = furi.decode(uri)
-    
-    -- 查找调用者函数
-    local callerFunction = nil
-    local currentNode = source.parent
-    while currentNode do
-        if currentNode.type == 'function' then
-            callerFunction = currentNode
-            break
-        end
-        currentNode = currentNode.parent
-    end
-    
-    local callerName = "global"
-    if callerFunction then
-        callerName = utils.getFunctionName(callerFunction) or "anonymous"
-    end
-    
-    -- 对调用者函数名称也应用别名处理
-    local resolvedCallerName = callerName
-    if callerName ~= "global" and callerName ~= "anonymous" then
-        for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-            if aliasInfo.type == "class_definition" then
-                local targetClassName = aliasInfo.targetClass
-                
-                -- 处理静态函数调用 (aliasName.functionName -> targetClassName.functionName)
-                local aliasPrefix = aliasName .. "."
-                if callerName:sub(1, #aliasPrefix) == aliasPrefix then
-                    local functionName = callerName:sub(#aliasPrefix + 1)
-                    resolvedCallerName = targetClassName .. "." .. functionName
-                    break
-                end
-                
-                -- 处理方法调用 (aliasName:methodName -> targetClassName:methodName)
-                local aliasMethodPrefix = aliasName .. ":"
-                if callerName:sub(1, #aliasMethodPrefix) == aliasMethodPrefix then
-                    local methodName = callerName:sub(#aliasMethodPrefix + 1)
-                    resolvedCallerName = targetClassName .. ":" .. methodName
-                    break
-                end
-            end
-        end
-    end
-    
-    -- 查找被调用函数实体（使用解析后的名称）
-    local calleeEntityId = nil
-    for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'function' and entity.name == resolvedCallName then
-            calleeEntityId = entity.id
-            break
-        end
-    end
-    
-    -- 查找调用者函数实体
-    local callerEntityId = nil
-    for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'function' and entity.name == resolvedCallerName then
-            callerEntityId = entity.id
-            break
-        end
-    end
-    
-    -- 如果找不到调用者，创建一个全局调用上下文
-    if not callerEntityId and resolvedCallerName == "global" then
-        callerEntityId = context.addEntity(ctx, 'function', {
-            name = "global",
-            isMethod = false,
-            className = nil,
-            params = {},
-            scope = "global",
-            isAnonymous = false,
-            module = moduleId,
-            sourceCode = nil,
-            category = 'function',
-            sourceLocation = {
-                file = filePath,
-                line = position.line,
-                column = position.column
-            }
-        })
-    end
-    
-    -- 创建调用关系
-    if callerEntityId and calleeEntityId then
-        context.addRelation(ctx, 'calls', callerEntityId, calleeEntityId, {
-            relationship = 'function_call',
-            callName = resolvedCallName,  -- 使用解析后的名称
-            sourceLocation = {
-                file = filePath,
-                line = position.line,
-                column = position.column
-            }
-        })
-        
-        context.debug(ctx, "函数调用: %s -> %s (原始: %s)", resolvedCallerName, resolvedCallName, callName)
-    else
-        context.debug(ctx, "未找到函数调用匹配: %s -> %s (解析为: %s)", resolvedCallerName, callName, resolvedCallName)
-    end
+    return callName
 end
 
--- 分析类型实例化
-local function analyzeTypeInstantiation(ctx, uri, moduleId, source)
-    local callName = utils.getCallName(source)
-    if not callName or not callName:find(':new') then return end
-    
-    local className = callName:match('([^:]+):new')
-    if not className then return end
-    
-    local position = utils.getNodePosition(source)
-    local filePath = furi.decode(uri)
-    
-    -- 查找类实体
-    local classEntityId = nil
+-- 查找实体通过符号ID
+local function findEntityBySymbolId(ctx, symbolId)
     for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'class' and entity.name == className then
-            classEntityId = entity.id
-            break
+        if entity.symbolId == symbolId then
+            return entity
         end
     end
+    return nil
+end
+
+-- 查找实体通过名称和类型
+local function findEntityByNameAndType(ctx, name, entityType)
+    for _, entity in ipairs(ctx.entities) do
+        if entity.type == entityType and entity.name == name then
+            return entity
+        end
+    end
+    return nil
+end
+
+-- 处理函数调用关系
+local function processFunctionCalls(ctx)
+    local functionCallCount = 0
     
-    if classEntityId then
-        -- 查找实例化的上下文
-        local contextFunction = nil
-        local currentNode = source.parent
-        while currentNode do
-            if currentNode.type == 'function' then
-                contextFunction = currentNode
-                break
-            end
-            currentNode = currentNode.parent
+    context.debug(ctx, "处理函数调用关系，共 %d 个调用记录", #ctx.calls.callInfos)
+    
+    for _, callInfo in ipairs(ctx.calls.callInfos) do
+        local resolvedCallName = resolveAliasedCallName(ctx, callInfo.callName)
+        
+        -- 查找调用者实体
+        local callerEntity = nil
+        if callInfo.sourceSymbolId then
+            callerEntity = findEntityBySymbolId(ctx, callInfo.sourceSymbolId)
         end
         
-        local contextName = "global"
-        if contextFunction then
-            contextName = utils.getFunctionName(contextFunction) or "anonymous"
+        -- 查找被调用者实体
+        local calleeEntity = nil
+        if callInfo.targetSymbolId then
+            calleeEntity = findEntityBySymbolId(ctx, callInfo.targetSymbolId)
+        else
+            -- 如果没有直接的目标符号ID，尝试通过名称查找
+            calleeEntity = findEntityByNameAndType(ctx, resolvedCallName, 'function')
         end
         
-        -- 查找上下文实体
-        local contextEntityId = nil
-        for _, entity in ipairs(ctx.entities) do
-            if entity.type == 'function' and entity.name == contextName then
-                contextEntityId = entity.id
-                break
-            end
-        end
-        
-        if contextEntityId then
-            context.addRelation(ctx, 'instantiates', contextEntityId, classEntityId, {
-                relationship = 'type_instantiation',
-                className = className,
+        if callerEntity and calleeEntity then
+            -- 创建函数调用关系
+            context.addRelation(ctx, 'calls', callerEntity.id, calleeEntity.id, {
+                relationship = 'function_call',
+                originalCallName = callInfo.callName,
+                resolvedCallName = resolvedCallName,
+                parameterCount = #(callInfo.parameters or {}),
                 sourceLocation = {
-                    file = filePath,
-                    line = position.line,
-                    column = position.column
+                    file = callInfo.location.uri and furi.decode(callInfo.location.uri) or nil,
+                    line = callInfo.location.line,
+                    column = callInfo.location.column
                 }
             })
             
-            context.debug(ctx, "类型实例化: %s 在 %s", className, contextName)
+            functionCallCount = functionCallCount + 1
+            context.debug(ctx, "函数调用关系: %s -> %s", callerEntity.name, calleeEntity.name)
+        else
+            context.debug(ctx, "未找到调用关系实体: %s -> %s (源ID: %s, 目标ID: %s)", 
+                callInfo.callName, resolvedCallName, 
+                callInfo.sourceSymbolId or "nil", callInfo.targetSymbolId or "nil")
         end
     end
+    
+    context.debug(ctx, "处理了 %d 个函数调用关系", functionCallCount)
+    return functionCallCount
 end
 
--- 分析require依赖
-local function analyzeRequireDependency(ctx, uri, moduleId, source)
-    local callName = utils.getCallName(source)
-    if not callName or (callName ~= 'require' and callName ~= 'kg_require') then return end
+-- 处理类型实例化关系
+local function processTypeInstantiations(ctx)
+    local instantiationCount = 0
     
-    local modulePath = utils.getRequireModulePath(source)
-    if not modulePath then return end
-    
-    local position = utils.getNodePosition(source)
-    local filePath = furi.decode(uri)
-    
-    -- 查找当前模块实体
-    local currentModuleEntityId = nil
-    for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'module' and entity.uri == uri then
-            currentModuleEntityId = entity.id
-            break
-        end
-    end
-    
-    -- 查找被依赖模块实体
-    local dependentModuleEntityId = nil
-    for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'module' and entity.name == modulePath then
-            dependentModuleEntityId = entity.id
-            break
-        end
-    end
-    
-    if currentModuleEntityId and dependentModuleEntityId then
-        context.addRelation(ctx, 'depends_on', currentModuleEntityId, dependentModuleEntityId, {
-            relationship = 'module_dependency',
-            requireType = callName,
-            modulePath = modulePath,
-            sourceLocation = {
-                file = filePath,
-                line = position.line,
-                column = position.column
-            }
-        })
+    for _, callInfo in ipairs(ctx.calls.callInfos) do
+        local callName = callInfo.callName
         
-        context.debug(ctx, "模块依赖: %s -> %s", moduleId, modulePath)
+        -- 检查是否为构造函数调用
+        if callName:find(':new') or callName:find('%.new') then
+            local className = nil
+            if callName:find(':new') then
+                className = callName:match('([^:]+):new')
+            elseif callName:find('%.new') then
+                className = callName:match('([^.]+)%.new')
+            end
+            
+            if className then
+                -- 解析别名
+                local resolvedClassName = className
+                if ctx.symbols.aliases then
+                    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+                        if aliasInfo.type == "class_alias" and aliasName == className then
+                            resolvedClassName = aliasInfo.targetName
+                            break
+                        end
+                    end
+                end
+                
+                -- 查找类实体
+                local classEntity = findEntityByNameAndType(ctx, resolvedClassName, 'class')
+                
+                -- 查找调用者实体
+                local callerEntity = nil
+                if callInfo.sourceSymbolId then
+                    callerEntity = findEntityBySymbolId(ctx, callInfo.sourceSymbolId)
+                end
+                
+                if classEntity and callerEntity then
+                    -- 创建类型实例化关系
+                    context.addRelation(ctx, 'instantiates', callerEntity.id, classEntity.id, {
+                        relationship = 'type_instantiation',
+                        originalClassName = className,
+                        resolvedClassName = resolvedClassName,
+                        sourceLocation = {
+                            file = callInfo.location.uri and furi.decode(callInfo.location.uri) or nil,
+                            line = callInfo.location.line,
+                            column = callInfo.location.column
+                        }
+                    })
+                    
+                    instantiationCount = instantiationCount + 1
+                    context.debug(ctx, "类型实例化关系: %s -> %s", callerEntity.name, classEntity.name)
+                end
+            end
+        end
     end
+    
+    context.debug(ctx, "处理了 %d 个类型实例化关系", instantiationCount)
+    return instantiationCount
 end
 
--- 分析文件中的调用关系
-local function analyzeFileCalls(ctx, uri)
-    local state = files.getState(uri)
-    if not state or not state.ast then
-        return
+-- 处理模块依赖关系
+local function processModuleDependencies(ctx)
+    local dependencyCount = 0
+    
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.REFERENCE then
+            -- 查找源模块实体
+            local sourceModuleEntity = nil
+            if symbol.parent then
+                sourceModuleEntity = findEntityBySymbolId(ctx, symbol.parent.id)
+            end
+            
+            -- 查找目标模块实体
+            local targetModuleEntity = nil
+            if symbol.target then
+                targetModuleEntity = findEntityBySymbolId(ctx, symbol.target)
+            end
+            
+            if sourceModuleEntity and targetModuleEntity then
+                -- 创建模块依赖关系
+                context.addRelation(ctx, 'depends_on', sourceModuleEntity.id, targetModuleEntity.id, {
+                    relationship = 'module_dependency',
+                    requireType = 'require', -- 可以从AST中获取更精确的类型
+                    modulePath = symbol.name,
+                    sourceLocation = {
+                        file = nil, -- 需要从AST中获取
+                        line = 1,
+                        column = 1
+                    }
+                })
+                
+                dependencyCount = dependencyCount + 1
+                context.debug(ctx, "模块依赖关系: %s -> %s", sourceModuleEntity.name, targetModuleEntity.name)
+            end
+        end
     end
     
-    local moduleId = utils.getModulePath(uri, ctx.rootUri)
-    context.debug(ctx, "分析文件调用关系: %s", moduleId)
+    context.debug(ctx, "处理了 %d 个模块依赖关系", dependencyCount)
+    return dependencyCount
+end
+
+-- 处理变量赋值关系
+local function processVariableAssignments(ctx)
+    local assignmentCount = 0
     
-    -- 遍历AST节点
-    guide.eachSource(state.ast, function(source)
-        if source.type == 'call' then
-            analyzeFunctionCall(ctx, uri, moduleId, source)
-            analyzeTypeInstantiation(ctx, uri, moduleId, source)
-            analyzeRequireDependency(ctx, uri, moduleId, source)
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.related and next(symbol.related) then
+            -- 查找变量实体
+            local variableEntity = findEntityBySymbolId(ctx, symbolId)
+            
+            if variableEntity then
+                for relatedId, _ in pairs(symbol.related) do
+                    -- 查找相关实体
+                    local relatedEntity = findEntityBySymbolId(ctx, relatedId)
+                    
+                    if relatedEntity then
+                        -- 创建变量赋值关系
+                        context.addRelation(ctx, 'assigned_from', variableEntity.id, relatedEntity.id, {
+                            relationship = 'variable_assignment',
+                            sourceLocation = {
+                                file = nil, -- 需要从AST中获取
+                                line = 1,
+                                column = 1
+                            }
+                        })
+                        
+                        assignmentCount = assignmentCount + 1
+                        context.debug(ctx, "变量赋值关系: %s <- %s", variableEntity.name, relatedEntity.name)
+                    end
+                end
+            end
         end
-    end)
+    end
+    
+    context.debug(ctx, "处理了 %d 个变量赋值关系", assignmentCount)
+    return assignmentCount
 end
 
 -- 主分析函数
 function phase4.analyze(ctx)
-    local uris = context.getFiles(ctx)
-    local totalFiles = #uris
+    print("🔍 第四阶段：函数调用关系分析")
     
-    print(string.format("  发现 %d 个Lua文件", totalFiles))
-    
-    for i, uri in ipairs(uris) do
-        analyzeFileCalls(ctx, uri)
-        
-        -- 显示进度
-        if i % 10 == 0 or i == totalFiles then
-            print(string.format("  进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
-        end
+    -- 初始化节点跟踪器
+    if ctx.config.enableNodeTracking then
+        tracker4 = nodeTracker.new("phase4_calls")
     end
     
-    -- 统计调用关系
-    local functionCalls = 0
-    local typeCalls = 0
-    local moduleDeps = 0
+    print("  分析调用关系...")
     
-    for _, relation in ipairs(ctx.relations) do
-        if relation.type == 'calls' then
-            functionCalls = functionCalls + 1
-        elseif relation.type == 'instantiates' then
-            typeCalls = typeCalls + 1
-        elseif relation.type == 'depends_on' then
-            moduleDeps = moduleDeps + 1
-        end
+    -- 处理各类关系
+    local functionCallCount = processFunctionCalls(ctx)
+    local instantiationCount = processTypeInstantiations(ctx)
+    local dependencyCount = processModuleDependencies(ctx)
+    local assignmentCount = processVariableAssignments(ctx)
+    
+    -- 统计信息
+    local totalRelations = #ctx.relations
+    
+    print(string.format("  ✅ 函数调用关系分析完成:"))
+    print(string.format("    新增关系: %d", functionCallCount + instantiationCount + dependencyCount + assignmentCount))
+    print(string.format("    函数调用: %d, 类型实例化: %d, 模块依赖: %d, 变量赋值: %d", 
+        functionCallCount, instantiationCount, dependencyCount, assignmentCount))
+    print(string.format("    总关系数: %d", totalRelations))
+    
+    -- 打印节点跟踪统计
+    if ctx.config.enableNodeTracking and tracker4 then
+        nodeTracker.printStatistics(tracker4)
     end
-    
-    print(string.format("  ✅ 函数调用分析完成:"))
-    print(string.format("     函数调用: %d, 类型实例化: %d, 模块依赖: %d", 
-        functionCalls, typeCalls, moduleDeps))
 end
 
 return phase4 

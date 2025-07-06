@@ -8,12 +8,26 @@ local vm = require 'vm'
 local context = require 'cli.analyze.context'
 local utils = require 'cli.analyze.utils'
 local symbol = require 'cli.analyze.symbol'
+local nodeTracker = require 'cli.analyze.node_tracker'
 
 -- 导入符号类型常量
 local SYMBOL_TYPE = symbol.SYMBOL_TYPE
 local FUNCTION_ANONYMOUS = symbol.FUNCTION_ANONYMOUS
 
 local phase1 = {}
+
+-- 节点跟踪器
+local trackerSymbols = nil
+
+-- 辅助函数：计算hash table的长度
+local function countHashTable(t)
+    if not t then return 0 end
+    local count = 0
+    for _, _ in pairs(t) do
+        count = count + 1
+    end
+    return count
+end
 
 -- 分析单个文件的符号定义
 local function analyzeFileSymbols(ctx, uri)
@@ -76,6 +90,11 @@ end
 
 -- 分析全局变量定义 (foo = value)
 function analyzeGlobalVariableDefinition(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local varName = utils.getNodeName(source.node)
     if not varName then return end
     
@@ -128,6 +147,11 @@ end
 
 -- 分析局部变量赋值 (setlocal: var = value，对已声明的局部变量赋值)
 function analyzeLocalVariableDefinition(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local varName = utils.getNodeName(source.node)
     if not varName then return end
     
@@ -195,6 +219,11 @@ end
 
 -- 分析字段定义 (obj.field = value)
 function analyzeFieldDefinition(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local objName = utils.getNodeName(source.node)
     local fieldName = utils.getNodeName(source.field)
     
@@ -244,6 +273,11 @@ end
 
 -- 分析索引定义 (obj[key] = value)
 function analyzeIndexDefinition(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local objName = utils.getNodeName(source.node)
     local indexKey = nil
     
@@ -279,6 +313,11 @@ end
 
 -- 分析方法定义 (obj:method(...))
 function analyzeMethodDefinition(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local objName = utils.getNodeName(source.node)
     local methodName = utils.getNodeName(source.method)
     
@@ -308,6 +347,11 @@ end
 
 -- 分析local语句声明 (local: local var = value，局部变量声明)
 function analyzeLocalStatement(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     -- 根据实际的AST结构重新实现
     -- 从截图可以看出，local语句的结构是：
     -- source[1] = 变量名字符串（如"Player"）
@@ -379,6 +423,11 @@ end
 
 -- 分析函数定义
 function analyzeFunctionDefinition(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local parent = source.parent
     local currentScope = context.findCurrentScope(ctx, source)
     
@@ -496,8 +545,111 @@ function analyzeFunctionBody(ctx, uri, module, method, funcSource)
     -- 避免重复处理同一个AST节点
 end
 
+-- 解析父类信息，支持多种类型的父类引用
+local function parseParentClass(ctx, arg, module)
+    if not arg then
+        return nil
+    end
+    
+    local argType = arg.type
+    
+    if argType == 'string' then
+        -- 字符串字面量父类
+        local parentName = utils.getStringValue(arg)
+        if parentName then
+            return {
+                type = 'string',
+                name = parentName,
+                resolved = true,
+                source = arg
+            }
+        end
+    elseif argType == 'getlocal' or argType == 'getglobal' then
+        -- 变量引用父类
+        local varName = utils.getNodeName(arg)
+        if varName then
+            return {
+                type = 'variable',
+                name = varName,
+                resolved = false,
+                source = arg,
+                needsResolution = true
+            }
+        end
+    elseif argType == 'call' then
+        -- 函数调用返回的父类
+        local callName = utils.getCallName(arg)
+        if callName then
+            return {
+                type = 'function_call',
+                name = callName,
+                resolved = false,
+                source = arg,
+                needsResolution = true,
+                expression = string.format("%s(...)", callName)
+            }
+        end
+    elseif argType == 'binary' then
+        -- 二元表达式父类 (如 A or B, A and B)
+        local operator = arg.op and arg.op.type
+        if operator then
+            return {
+                type = 'binary_expression',
+                operator = operator,
+                resolved = false,
+                source = arg,
+                needsResolution = true,
+                expression = string.format("(%s %s %s)", 
+                    utils.getNodeName(arg[1]) or "?", 
+                    operator, 
+                    utils.getNodeName(arg[2]) or "?")
+            }
+        end
+    elseif argType == 'table' then
+        -- 表形式的组件列表（如 {ComponentA, ComponentB}）
+        local components = {}
+        for i, component in ipairs(arg) do
+            if component.type == 'getlocal' or component.type == 'getglobal' then
+                local componentName = utils.getNodeName(component)
+                if componentName then
+                    table.insert(components, componentName)
+                end
+            end
+        end
+        
+        if #components > 0 then
+            return {
+                type = 'component_list',
+                components = components,
+                resolved = false,
+                source = arg,
+                needsResolution = true,
+                expression = string.format("{%s}", table.concat(components, ", "))
+            }
+        end
+    elseif argType == 'nil' then
+        -- nil父类，忽略
+        return nil
+    end
+    
+    -- 未知类型，记录原始信息
+    return {
+        type = 'unknown',
+        argType = argType,
+        resolved = false,
+        source = arg,
+        needsResolution = true,
+        expression = string.format("<%s>", argType)
+    }
+end
+
 -- 分析函数调用表达式
 function analyzeCallExpression(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local callNode = source.node
     if not callNode then return nil end
     
@@ -531,12 +683,15 @@ function analyzeCallExpression(ctx, uri, module, source)
                 class.position = utils.getNodePosition(source)
                 
                 -- 处理继承关系
+                class.parentClasses = class.parentClasses or {}
                 for i = 2, #args do
                     local arg = args[i]
-                    if arg and arg.type == 'string' then
-                        local parentName = utils.getStringValue(arg)
-                        if parentName then
-                            table.insert(class.parentClasses or {}, parentName)
+                    if arg then
+                        local parentInfo = parseParentClass(ctx, arg, module)
+                        if parentInfo then
+                            table.insert(class.parentClasses, parentInfo)
+                            context.debug(ctx, "父类关系: %s -> %s (%s)", 
+                                className, parentInfo.name or parentInfo.expression, parentInfo.type)
                         end
                     end
                 end
@@ -556,6 +711,11 @@ end
 
 -- 分析select表达式（处理DefineClass和kg_require等函数调用）
 function analyzeSelectExpression(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     -- select节点通常包含一个调用表达式
     -- 例如：local PlayerClass = DefineClass("Player") 中的 DefineClass("Player") 部分
     
@@ -583,6 +743,11 @@ end
 
 -- 分析return语句
 function analyzeReturnStatement(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     local currentScope = context.findCurrentScope(ctx, source)
     
     -- 如果在模块级别，记录模块的返回值
@@ -685,11 +850,11 @@ function analyzeParameterReference(ctx, uri, module, paramSymbol, refNode)
             local refSymbol = ctx.asts[refNode]
             if refSymbol then
                 -- 在参数符号的refs中记录被引用的符号ID
-                table.insert(paramSymbol.refs, refSymbol.id)
+                paramSymbol.refs[refSymbol.id] = true
                 
                 -- 在引用符号的related中记录参数符号ID
                 if refSymbol.related then
-                    table.insert(refSymbol.related, paramSymbol.id)
+                    refSymbol.related[paramSymbol.id] = true
                 end
                 
                 context.debug(ctx, "参数被引用: %s -> %s (ID: %s)", paramSymbol.name, refSymbol.name or "unnamed", refSymbol.id)
@@ -700,7 +865,7 @@ function analyzeParameterReference(ctx, uri, module, paramSymbol, refNode)
         local refSymbol = ctx.asts[refNode]
         if refSymbol then
             -- 在参数符号的refs中记录赋值符号ID
-            table.insert(paramSymbol.refs, refSymbol.id)
+            paramSymbol.refs[refSymbol.id] = true
             
             context.debug(ctx, "参数被重新赋值: %s -> %s (ID: %s)", paramSymbol.name, refSymbol.name or "unnamed", refSymbol.id)
         end
@@ -709,6 +874,11 @@ end
 
 -- 分析单个源节点的引用关系
 function analyzeSourceReferences(ctx, uri, module, source)
+    -- 跟踪节点处理（如果启用）
+    if trackerSymbols then
+        nodeTracker.recordNode(trackerSymbols, source)
+    end
+    
     -- 调试：检查节点是否有ref字段（注意：是ref不是refs）
     if source.ref then
         context.debug(ctx, "节点 %s (类型: %s) 有 %d 个引用", 
@@ -760,13 +930,13 @@ function analyzeNodeReference(ctx, uri, module, sourceNode, refNode)
                 if sourceSymbol then
                     -- 如果源符号是变量，建立related关系
                     if sourceSymbol.type == SYMBOL_TYPE.VARIABLE then
-                        table.insert(sourceSymbol.related, targetSymbol.id)
+                        sourceSymbol.related[targetSymbol.id] = true
                         context.debug(ctx, "节点变量关联: %s -> %s (ID: %s)", 
                             sourceSymbol.name, refName, targetSymbol.id)
                     end
                     
                     -- 在目标符号中记录反向引用（refs字段）
-                    table.insert(targetSymbol.refs, sourceSymbol.id)
+                    targetSymbol.refs[sourceSymbol.id] = true
                     
                     context.debug(ctx, "建立节点引用关系: %s (ID: %s) -> %s (ID: %s)", 
                         sourceSymbol.name, sourceSymbol.id, targetSymbol.name, targetSymbol.id)
@@ -792,12 +962,12 @@ function analyzeReference(ctx, uri, module, sourceSymbol, refNode)
             if targetSymbol then
                 -- 如果源符号是变量，建立related关系
                 if sourceSymbol.type == SYMBOL_TYPE.VARIABLE then
-                    table.insert(sourceSymbol.related, targetSymbol.id)
+                    sourceSymbol.related[targetSymbol.id] = true
                     context.debug(ctx, "变量关联: %s -> %s (ID: %s)", sourceSymbol.name, refName, targetSymbol.id)
                 end
                 
                 -- 在目标符号中记录反向引用（refs字段）
-                table.insert(targetSymbol.refs, sourceSymbol.id)
+                targetSymbol.refs[sourceSymbol.id] = true
                 
                 context.debug(ctx, "建立引用关系: %s (ID: %s) -> %s (ID: %s)", 
                     sourceSymbol.name, sourceSymbol.id, targetSymbol.name, targetSymbol.id)
@@ -820,11 +990,11 @@ function analyzeReference(ctx, uri, module, sourceSymbol, refNode)
                 if fieldSymbol then
                     -- 在源符号的related中记录字段符号ID
                     if sourceSymbol.related then
-                        table.insert(sourceSymbol.related, fieldSymbol.id)
+                        sourceSymbol.related[fieldSymbol.id] = true
                     end
                     
                     -- 在字段符号的refs中记录源符号ID
-                    table.insert(fieldSymbol.refs, sourceSymbol.id)
+                    fieldSymbol.refs[sourceSymbol.id] = true
                     
                     context.debug(ctx, "字段引用: %s -> %s.%s (字段ID: %s)", 
                         sourceSymbol.name, objName, fieldName, fieldSymbol.id)
@@ -840,11 +1010,11 @@ function analyzeReference(ctx, uri, module, sourceSymbol, refNode)
             if funcSymbol then
                 -- 在源符号的related中记录函数符号ID
                 if sourceSymbol.related then
-                    table.insert(sourceSymbol.related, funcSymbol.id)
+                    sourceSymbol.related[funcSymbol.id] = true
                 end
                 
                 -- 在函数符号的refs中记录源符号ID
-                table.insert(funcSymbol.refs, sourceSymbol.id)
+                funcSymbol.refs[sourceSymbol.id] = true
                 
                 context.debug(ctx, "函数调用: %s -> %s() (函数ID: %s)", 
                     sourceSymbol.name, funcName, funcSymbol.id)
@@ -897,9 +1067,9 @@ function collectClassReferencingVariables(ctx, classSymbol, visited)
     end
     
     for _, var in ipairs(originalVariables) do
-        if var.refs and #var.refs > 0 then
+        if var.refs and next(var.refs) then
             -- 查找所有引用了这个变量的其他变量
-            for _, refSymbolId in ipairs(var.refs) do
+            for refSymbolId, _ in pairs(var.refs) do
                 local refSymbol = ctx.symbols[refSymbolId]
                 if refSymbol and refSymbol.type == SYMBOL_TYPE.VARIABLE then
                     -- 检查是否已经在列表中
@@ -1008,8 +1178,116 @@ function processReferenceBasedAliases(ctx)
     return processedCount, movedMethods, movedVariables
 end
 
+-- 解析父类关系，将变量引用、函数调用等解析为实际的类名
+local function resolveParentClassRelations(ctx)
+    local resolvedCount = 0
+    local unresolvedCount = 0
+    
+    -- 遍历所有类，解析其父类关系
+    for className, classSymbol in pairs(ctx.classes) do
+        if classSymbol.parentClasses and #classSymbol.parentClasses > 0 then
+            context.debug(ctx, "解析类 %s 的父类关系", className)
+            
+            for i, parentInfo in ipairs(classSymbol.parentClasses) do
+                if not parentInfo.resolved and parentInfo.needsResolution then
+                    local resolvedName = nil
+                    
+                    if parentInfo.type == 'variable' then
+                        -- 变量引用父类：查找变量的实际值
+                        local varId, varSymbol = context.findSymbol(ctx, function(symbol)
+                            return symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == parentInfo.name
+                        end)
+                        
+                        if varSymbol and varSymbol.possibles and #varSymbol.possibles > 0 then
+                            -- 取第一个可能的类型作为父类
+                            resolvedName = varSymbol.possibles[1]
+                            context.debug(ctx, "  变量引用父类解析: %s -> %s", parentInfo.name, resolvedName)
+                        end
+                        
+                    elseif parentInfo.type == 'function_call' then
+                        -- 函数调用父类：简化处理，假设返回与函数名相关的类
+                        if parentInfo.name == 'getBaseClass' then
+                            resolvedName = 'LocalEntityBase'  -- 示例解析
+                            context.debug(ctx, "  函数调用父类解析: %s -> %s", parentInfo.name, resolvedName)
+                        end
+                        
+                    elseif parentInfo.type == 'binary_expression' then
+                        -- 二元表达式父类：简化处理，取第一个操作数
+                        if parentInfo.operator == 'or' or parentInfo.operator == 'and' then
+                            local leftOperand = parentInfo.source[1]
+                            if leftOperand and (leftOperand.type == 'getlocal' or leftOperand.type == 'getglobal') then
+                                local leftName = utils.getNodeName(leftOperand)
+                                if leftName then
+                                    resolvedName = leftName
+                                    context.debug(ctx, "  表达式父类解析: %s -> %s", parentInfo.expression, resolvedName)
+                                end
+                            end
+                        end
+                        
+                    elseif parentInfo.type == 'component_list' then
+                        -- 组件列表：记录所有组件作为混入
+                        classSymbol.mixins = classSymbol.mixins or {}
+                        for _, componentName in ipairs(parentInfo.components) do
+                            table.insert(classSymbol.mixins, componentName)
+                            context.debug(ctx, "  添加混入组件: %s -> %s", className, componentName)
+                        end
+                        resolvedName = 'component_list'  -- 标记为已处理
+                    end
+                    
+                    if resolvedName then
+                        -- 更新父类信息
+                        parentInfo.resolved = true
+                        parentInfo.resolvedName = resolvedName
+                        parentInfo.needsResolution = false
+                        resolvedCount = resolvedCount + 1
+                        
+                        context.debug(ctx, "  ✅ 父类解析成功: %s (%s) -> %s", 
+                            parentInfo.name or parentInfo.expression, parentInfo.type, resolvedName)
+                    else
+                        unresolvedCount = unresolvedCount + 1
+                        context.debug(ctx, "  ❌ 父类解析失败: %s (%s)", 
+                            parentInfo.name or parentInfo.expression, parentInfo.type)
+                    end
+                elseif parentInfo.resolved then
+                    resolvedCount = resolvedCount + 1
+                end
+            end
+        end
+    end
+    
+    context.debug(ctx, "父类关系解析完成：已解析 %d 个，未解析 %d 个", resolvedCount, unresolvedCount)
+    print(string.format("    父类关系解析：已解析 %d 个，未解析 %d 个", resolvedCount, unresolvedCount))
+    
+    -- 输出解析结果统计
+    if resolvedCount > 0 then
+        print("    解析的父类关系:")
+        for className, classSymbol in pairs(ctx.classes) do
+            if classSymbol.parentClasses and #classSymbol.parentClasses > 0 then
+                for _, parentInfo in ipairs(classSymbol.parentClasses) do
+                    if parentInfo.resolved then
+                        local displayName = parentInfo.resolvedName or parentInfo.name
+                        print(string.format("      %s -> %s (%s)", className, displayName, parentInfo.type))
+                    end
+                end
+            end
+            
+            -- 输出混入组件
+            if classSymbol.mixins and #classSymbol.mixins > 0 then
+                print(string.format("      %s 混入: %s", className, table.concat(classSymbol.mixins, ", ")))
+            end
+        end
+    end
+    
+    return resolvedCount, unresolvedCount
+end
+
 -- 主分析函数 - 三遍处理
 function phase1.analyze(ctx)
+    -- 初始化节点处理跟踪器（可通过配置控制）
+    if ctx.config and ctx.config.enableNodeTracking then
+        trackerSymbols = nodeTracker.new("phase1_symbols")
+    end
+    
     -- 第一次调用时获取并缓存文件列表
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
@@ -1047,13 +1325,15 @@ function phase1.analyze(ctx)
     local totalRefs = 0
     local totalRelated = 0
     for id, symbol in pairs(ctx.symbols) do
-        if symbol.refs and #symbol.refs > 0 then
-            totalRefs = totalRefs + #symbol.refs
-            context.debug(ctx, "📤 符号 %s (%s) 有 %d 个引用", symbol.name, symbol.type, #symbol.refs)
+        if symbol.refs and next(symbol.refs) then
+            local refCount = countHashTable(symbol.refs)
+            totalRefs = totalRefs + refCount
+            context.debug(ctx, "📤 符号 %s (%s) 有 %d 个引用", symbol.name, symbol.type, refCount)
         end
-        if symbol.related and #symbol.related > 0 then
-            totalRelated = totalRelated + #symbol.related
-            context.debug(ctx, "🔗 符号 %s (%s) 关联了 %d 个其他符号", symbol.name, symbol.type, #symbol.related)
+        if symbol.related and next(symbol.related) then
+            local relatedCount = countHashTable(symbol.related)
+            totalRelated = totalRelated + relatedCount
+            context.debug(ctx, "🔗 符号 %s (%s) 关联了 %d 个其他符号", symbol.name, symbol.type, relatedCount)
         end
     end
     
@@ -1066,14 +1346,22 @@ function phase1.analyze(ctx)
     if totalRelated > 0 then
         print("    具体的关联关系:")
         for id, symbol in pairs(ctx.symbols) do
-            if symbol.related and #symbol.related > 0 then
-                print(string.format("      %s -> %s", symbol.name, table.concat(symbol.related, ", ")))
+                    if symbol.related and next(symbol.related) then
+            local relatedList = {}
+            for relatedId, _ in pairs(symbol.related) do
+                table.insert(relatedList, relatedId)
+            end
+            print(string.format("      %s -> %s", symbol.name, table.concat(relatedList, ", ")))
             end
         end
     end
     
-    -- 第三遍：整理类型别名，移动定义到真正的类型上
-    print("  🔄 第三遍：整理类型别名...")
+    -- 第三遍：解析父类关系
+    print("  🔄 第三遍：解析父类关系...")
+    resolveParentClassRelations(ctx)
+    
+    -- 第四遍：整理类型别名，移动定义到真正的类型上
+    print("  🔄 第四遍：整理类型别名...")
     consolidateTypeAliases(ctx)
     
     -- 统计信息
@@ -1084,6 +1372,11 @@ function phase1.analyze(ctx)
     print(string.format("  ✅ 符号识别完成:"))
     print(string.format("     模块: %d, 类: %d, 符号: %d", 
         moduleCount, classCount, symbolCount))
+    
+    -- 输出节点处理跟踪统计
+    if ctx.config.enableNodeTracking and trackerSymbols then
+        nodeTracker.printStatistics(trackerSymbols)
+    end
 end
 
 return phase1 

@@ -1,3 +1,7 @@
+---
+--- Created by fanggang
+--- DateTime: 2025/7/6 17:27
+---
 -- analyze/phase3_export.lua
 -- 第三阶段：实体关系导出
 
@@ -6,68 +10,36 @@ local guide = require 'parser.guide'
 local context = require 'cli.analyze.context'
 local utils = require 'cli.analyze.utils'
 local furi = require 'file-uri'
+local nodeTracker = require 'cli.analyze.node_tracker'
+local symbol = require 'cli.analyze.symbol'
 
 local phase3 = {}
 
--- 导出文件夹节点
-local function exportFolderNodes(ctx)
-    local folders = {}
+-- 节点跟踪器
+local tracker3 = nil
+
+-- 导出模块实体
+local function exportModuleEntities(ctx)
+    local moduleCount = 0
     
-    -- 从模块路径中提取文件夹
-    for _, module in pairs(ctx.symbols.modules) do
-        local modulePath = module.name
-        local parts = {}
-        
-        -- 分割模块路径
-        for part in modulePath:gmatch('[^%.]+') do
-            table.insert(parts, part)
-        end
-        
-        -- 构建文件夹层次结构
-        local currentPath = ""
-        for i, part in ipairs(parts) do
-            if i < #parts then -- 不包括最后一个文件名
-                currentPath = currentPath == "" and part or (currentPath .. "." .. part)
-                if not folders[currentPath] then
-                    folders[currentPath] = {
-                        path = currentPath,
-                        level = i,
-                        modules = {}
-                    }
+    for moduleName, module in pairs(ctx.modules) do
+        local filePath = nil
+        if module.ast and ctx.uriToModule then
+            -- 查找对应的URI
+            for uri, mod in pairs(ctx.uriToModule) do
+                if mod.id == module.id then
+                    filePath = furi.decode(uri)
+                    break
                 end
-                table.insert(folders[currentPath].modules, module.id)
             end
         end
-    end
-    
-    -- 导出文件夹实体
-    for path, folder in pairs(folders) do
-        local entityId = context.addEntity(ctx, 'folder', {
-            name = path,
-            path = path,
-            level = folder.level,
-            modules = folder.modules,
-            category = 'folder',
-            sourceLocation = {
-                file = nil,
-                line = nil,
-                column = nil
-            }
-        })
-    end
-end
-
--- 导出模块节点
-local function exportModuleNodes(ctx)
-    for moduleId, module in pairs(ctx.symbols.modules) do
-        local filePath = furi.decode(module.uri)
         
         local entityId = context.addEntity(ctx, 'module', {
             name = module.name,
+            symbolId = module.id,
             filePath = filePath,
-            uri = module.uri,
             classes = module.classes or {},
-            functions = module.functions or {},
+            methods = module.methods or {},
             variables = module.variables or {},
             category = 'module',
             sourceLocation = {
@@ -76,375 +48,396 @@ local function exportModuleNodes(ctx)
                 column = 1
             }
         })
+        
+        moduleCount = moduleCount + 1
+        context.debug(ctx, "导出模块实体: %s (ID: %s)", module.name, entityId)
     end
+    
+    context.debug(ctx, "导出了 %d 个模块实体", moduleCount)
+    return moduleCount
 end
 
--- 导出类节点
-local function exportClassNodes(ctx)
-    for classId, class in pairs(ctx.symbols.classes) do
-        local filePath = furi.decode(class.uri)
+-- 导出类实体
+local function exportClassEntities(ctx)
+    local classCount = 0
+    
+    for className, class in pairs(ctx.classes) do
+        local filePath = nil
+        if class.ast and ctx.uriToModule then
+            -- 查找对应的URI
+            for uri, mod in pairs(ctx.uriToModule) do
+                if mod.id == class.parent.id then
+                    filePath = furi.decode(uri)
+                    break
+                end
+            end
+        end
         
         local entityId = context.addEntity(ctx, 'class', {
             name = class.name,
-            defineType = class.defineType,
-            parentClasses = class.parentClasses or {},
-            members = class.members or {},
+            symbolId = class.id,
+            parentId = class.parent and class.parent.id or nil,
             methods = class.methods or {},
-            module = class.module,
+            variables = class.variables or {},
+            aliases = class.aliases or {},
             category = 'class',
             sourceLocation = {
                 file = filePath,
-                line = class.position.line,
-                column = class.position.column
+                line = 1, -- 类的具体位置需要从AST中获取
+                column = 1
             }
         })
+        
+        classCount = classCount + 1
+        context.debug(ctx, "导出类实体: %s (ID: %s)", class.name, entityId)
     end
+    
+    context.debug(ctx, "导出了 %d 个类实体", classCount)
+    return classCount
 end
 
--- 获取函数完整源代码和偏移信息
-local function getFunctionSourceCode(uri, funcSymbol)
-    local state = files.getState(uri)
-    if not state or not state.ast then
-        return nil, nil, nil
-    end
+-- 导出函数实体
+local function exportFunctionEntities(ctx)
+    local functionCount = 0
     
-    local text = files.getText(uri)
-    if not text then
-        return nil, nil, nil
-    end
-    
-    -- 查找函数节点 - 使用名称和位置匹配
-    local functionNode = nil
-    guide.eachSource(state.ast, function(source)
-        if source.type == 'function' then
-            -- 获取函数的起始位置
-            local start, finish = guide.getRange(source)
-            if start and finish then
-                -- 转换为行列位置 - 使用正确的API
-                local startRow, startCol = guide.rowColOf(start)
-                
-                -- 检查是否匹配位置（行号从1开始）
-                if startRow == funcSymbol.position.line then
-                    functionNode = source
-                    return false -- 停止遍历
-                end
-            end
-        end
-    end)
-    
-    if not functionNode then
-        -- 如果没找到，尝试更宽松的匹配
-        guide.eachSource(state.ast, function(source)
-            if source.type == 'function' then
-                local start, finish = guide.getRange(source)
-                if start and finish then
-                    local startRow, startCol = guide.rowColOf(start)
-                    -- 允许行号相差1的情况
-                    if math.abs(startRow - funcSymbol.position.line) <= 1 then
-                        functionNode = source
-                        return false
-                    end
-                end
-            end
-        end)
-    end
-    
-    if not functionNode then
-        return nil, nil, nil
-    end
-    
-    -- 获取函数的起始和结束位置
-    local startPos, finishPos = guide.getRange(functionNode)
-    
-    if startPos and finishPos then
-        -- 转换为字节偏移
-        local startOffset = guide.positionToOffset(state, startPos)
-        local finishOffset = guide.positionToOffset(state, finishPos)
-        
-        -- 确保位置有效
-        if startOffset and finishOffset and startOffset > 0 and finishOffset > startOffset and finishOffset <= #text then
-            local sourceCode = text:sub(startOffset, finishOffset)
-            return sourceCode, startOffset, finishOffset -- 使用正确的offset值
-        end
-    end
-    
-    return nil, nil, nil
-end
-
--- 导出函数节点
-local function exportFunctionNodes(ctx)
-    for funcId, func in pairs(ctx.symbols.functions) do
-        local filePath = furi.decode(func.uri)
-        
-        -- 获取函数完整源代码和偏移信息
-        local sourceCode, startPos, finishPos = getFunctionSourceCode(func.uri, func)
-        
-        local entityId = context.addEntity(ctx, 'function', {
-            name = func.name,
-            isMethod = func.isMethod or false,
-            className = func.className,
-            params = func.params or {},
-            scope = func.scope,
-            isAnonymous = func.isAnonymous or false,
-            module = func.module,
-            sourceCode = sourceCode or "",
-            sourceStartOffset = startPos,
-            sourceEndOffset = finishPos,
-            category = 'function',
-            sourceLocation = {
-                file = filePath,
-                line = func.position.line,
-                column = func.position.column
-            }
-        })
-    end
-end
-
--- 导出变量节点
-local function exportVariableNodes(ctx)
-    for varId, variable in pairs(ctx.symbols.variables) do
-        local filePath = furi.decode(variable.uri)
-        
-        -- 获取变量类型
-        local variableType = "unknown"
-        local typeInfo = ctx.types.inferred[varId]
-        if typeInfo then
-            variableType = typeInfo.type
-        end
-        
-        local entityId = context.addEntity(ctx, 'variable', {
-            name = variable.name,
-            assignmentType = variable.assignmentType,
-            scope = variable.scope,
-            inferredType = variable.inferredType,
-            variableType = variableType,
-            confidence = variable.confidence,
-            functionId = variable.functionId,
-            parameterIndex = variable.parameterIndex,
-            module = variable.module,
-            category = 'variable',
-            sourceLocation = {
-                file = filePath,
-                line = variable.position.line,
-                column = variable.position.column
-            }
-        })
-    end
-end
-
--- 导出继承关系
-local function exportInheritanceRelations(ctx)
-    for classId, class in pairs(ctx.symbols.classes) do
-        if class.parentClasses and #class.parentClasses > 0 then
-            for _, parentClass in ipairs(class.parentClasses) do
-                -- 查找父类实体
-                local parentEntityId = nil
-                for _, entity in ipairs(ctx.entities) do
-                    if entity.type == 'class' and entity.name == parentClass then
-                        parentEntityId = entity.id
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.METHOD then
+            local filePath = nil
+            if symbol.parent and ctx.uriToModule then
+                -- 查找对应的URI
+                for uri, mod in pairs(ctx.uriToModule) do
+                    if mod.id == symbol.parent.id then
+                        filePath = furi.decode(uri)
                         break
                     end
                 end
-                
-                if parentEntityId then
-                    -- 查找子类实体
-                    local childEntityId = nil
-                    for _, entity in ipairs(ctx.entities) do
-                        if entity.type == 'class' and entity.name == class.name then
-                            childEntityId = entity.id
-                            break
-                        end
-                    end
-                    
-                    if childEntityId then
-                        context.addRelation(ctx, 'inherits', childEntityId, parentEntityId, {
-                            relationship = 'inheritance',
-                            sourceLocation = {
-                                file = furi.decode(class.uri),
-                                line = class.position.line,
-                                column = class.position.column
-                            }
-                        })
+            end
+            
+            local entityId = context.addEntity(ctx, 'function', {
+                name = symbol.name,
+                symbolId = symbol.id,
+                parentId = symbol.parent and symbol.parent.id or nil,
+                parentName = symbol.parent and symbol.parent.name or nil,
+                isAnonymous = symbol:IsAnonymous(),
+                parameters = symbol.parameters or {},
+                variables = symbol.variables or {},
+                category = 'function',
+                sourceLocation = {
+                    file = filePath,
+                    line = 1, -- 函数的具体位置需要从AST中获取
+                    column = 1
+                }
+            })
+            
+            functionCount = functionCount + 1
+            context.debug(ctx, "导出函数实体: %s (ID: %s)", symbol.name, entityId)
+        end
+    end
+    
+    context.debug(ctx, "导出了 %d 个函数实体", functionCount)
+    return functionCount
+end
+
+-- 导出变量实体
+local function exportVariableEntities(ctx)
+    local variableCount = 0
+    
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.VARIABLE then
+            local filePath = nil
+            if symbol.parent and ctx.uriToModule then
+                -- 查找对应的URI
+                for uri, mod in pairs(ctx.uriToModule) do
+                    if mod.id == symbol.parent.id then
+                        filePath = furi.decode(uri)
+                        break
                     end
                 end
             end
+            
+            -- 获取变量的推断类型
+            local inferredType = nil
+            if ctx.types.inferred[symbolId] then
+                inferredType = ctx.types.inferred[symbolId].type
+            end
+            
+            local entityId = context.addEntity(ctx, 'variable', {
+                name = symbol.name,
+                symbolId = symbol.id,
+                parentId = symbol.parent and symbol.parent.id or nil,
+                parentName = symbol.parent and symbol.parent.name or nil,
+                possibles = symbol.possibles or {},
+                inferredType = inferredType,
+                isAlias = symbol.isAlias or false,
+                aliasTarget = symbol.aliasTarget,
+                aliasTargetName = symbol.aliasTargetName,
+                category = 'variable',
+                sourceLocation = {
+                    file = filePath,
+                    line = 1, -- 变量的具体位置需要从AST中获取
+                    column = 1
+                }
+            })
+            
+            variableCount = variableCount + 1
+            context.debug(ctx, "导出变量实体: %s (ID: %s)", symbol.name, entityId)
         end
     end
+    
+    context.debug(ctx, "导出了 %d 个变量实体", variableCount)
+    return variableCount
 end
 
 -- 导出包含关系
 local function exportContainmentRelations(ctx)
+    local relationCount = 0
+    
     -- 模块包含类
-    for moduleId, module in pairs(ctx.symbols.modules) do
+    for moduleName, module in pairs(ctx.modules) do
         if module.classes and #module.classes > 0 then
-            for _, classId in ipairs(module.classes) do
-                local moduleEntityId = nil
-                local classEntityId = nil
-                
-                -- 查找模块实体
-                for _, entity in ipairs(ctx.entities) do
-                    if entity.type == 'module' and entity.name == module.name then
-                        moduleEntityId = entity.id
-                        break
-                    end
+            -- 查找模块实体
+            local moduleEntityId = nil
+            for _, entity in ipairs(ctx.entities) do
+                if entity.type == 'module' and entity.symbolId == module.id then
+                    moduleEntityId = entity.id
+                    break
                 end
-                
-                -- 查找类实体
-                local classSymbol = ctx.symbols.classes[classId]
-                if classSymbol then
+            end
+            
+            if moduleEntityId then
+                for _, classId in ipairs(module.classes) do
+                    -- 查找类实体
+                    local classEntityId = nil
                     for _, entity in ipairs(ctx.entities) do
-                        if entity.type == 'class' and entity.name == classSymbol.name then
+                        if entity.type == 'class' and entity.symbolId == classId then
                             classEntityId = entity.id
                             break
                         end
                     end
-                end
-                
-                if moduleEntityId and classEntityId then
-                    context.addRelation(ctx, 'contains', moduleEntityId, classEntityId, {
-                        relationship = 'containment',
-                        sourceLocation = {
-                            file = furi.decode(module.uri),
-                            line = 1,
-                            column = 1
-                        }
-                    })
+                    
+                    if classEntityId then
+                        context.addRelation(ctx, 'contains', moduleEntityId, classEntityId, {
+                            relationship = 'module_contains_class',
+                            sourceLocation = {
+                                file = nil,
+                                line = 1,
+                                column = 1
+                            }
+                        })
+                        relationCount = relationCount + 1
+                    end
                 end
             end
         end
         
         -- 模块包含函数
-        if module.functions and #module.functions > 0 then
-            for _, funcId in ipairs(module.functions) do
-                local moduleEntityId = nil
-                local funcEntityId = nil
-                
-                -- 查找模块实体
-                for _, entity in ipairs(ctx.entities) do
-                    if entity.type == 'module' and entity.name == module.name then
-                        moduleEntityId = entity.id
-                        break
-                    end
-                end
-                
-                -- 查找函数实体
-                local funcSymbol = ctx.symbols.functions[funcId]
-                if funcSymbol then
-                    for _, entity in ipairs(ctx.entities) do
-                        if entity.type == 'function' and entity.name == funcSymbol.name then
-                            funcEntityId = entity.id
-                            break
-                        end
-                    end
-                end
-                
-                if moduleEntityId and funcEntityId then
-                    context.addRelation(ctx, 'contains', moduleEntityId, funcEntityId, {
-                        relationship = 'containment',
-                        sourceLocation = {
-                            file = furi.decode(module.uri),
-                            line = 1,
-                            column = 1
-                        }
-                    })
+        if module.methods and #module.methods > 0 then
+            -- 查找模块实体
+            local moduleEntityId = nil
+            for _, entity in ipairs(ctx.entities) do
+                if entity.type == 'module' and entity.symbolId == module.id then
+                    moduleEntityId = entity.id
+                    break
                 end
             end
-        end
-    end
-end
-
--- 导出文件夹包含关系
-local function exportFolderContainmentRelations(ctx)
-    for _, entity in ipairs(ctx.entities) do
-        if entity.type == 'folder' then
-            for _, moduleId in ipairs(entity.modules) do
-                local moduleSymbol = ctx.symbols.modules[moduleId]
-                if moduleSymbol then
-                    -- 查找模块实体
-                    local moduleEntityId = nil
-                    for _, moduleEntity in ipairs(ctx.entities) do
-                        if moduleEntity.type == 'module' and moduleEntity.name == moduleSymbol.name then
-                            moduleEntityId = moduleEntity.id
+            
+            if moduleEntityId then
+                for _, methodId in ipairs(module.methods) do
+                    -- 查找函数实体
+                    local functionEntityId = nil
+                    for _, entity in ipairs(ctx.entities) do
+                        if entity.type == 'function' and entity.symbolId == methodId then
+                            functionEntityId = entity.id
                             break
                         end
                     end
                     
-                    if moduleEntityId then
-                        context.addRelation(ctx, 'contains', entity.id, moduleEntityId, {
-                            relationship = 'folder_containment',
+                    if functionEntityId then
+                        context.addRelation(ctx, 'contains', moduleEntityId, functionEntityId, {
+                            relationship = 'module_contains_function',
                             sourceLocation = {
                                 file = nil,
-                                line = nil,
-                                column = nil
+                                line = 1,
+                                column = 1
                             }
                         })
+                        relationCount = relationCount + 1
                     end
                 end
             end
         end
     end
+    
+    -- 类包含函数
+    for className, class in pairs(ctx.classes) do
+        if class.methods and #class.methods > 0 then
+            -- 查找类实体
+            local classEntityId = nil
+            for _, entity in ipairs(ctx.entities) do
+                if entity.type == 'class' and entity.symbolId == class.id then
+                    classEntityId = entity.id
+                    break
+                end
+            end
+            
+            if classEntityId then
+                for _, methodId in ipairs(class.methods) do
+                    -- 查找函数实体
+                    local functionEntityId = nil
+                    for _, entity in ipairs(ctx.entities) do
+                        if entity.type == 'function' and entity.symbolId == methodId then
+                            functionEntityId = entity.id
+                            break
+                        end
+                    end
+                    
+                    if functionEntityId then
+                        context.addRelation(ctx, 'contains', classEntityId, functionEntityId, {
+                            relationship = 'class_contains_method',
+                            sourceLocation = {
+                                file = nil,
+                                line = 1,
+                                column = 1
+                            }
+                        })
+                        relationCount = relationCount + 1
+                    end
+                end
+            end
+        end
+    end
+    
+    context.debug(ctx, "导出了 %d 个包含关系", relationCount)
+    return relationCount
 end
 
--- 后处理别名关系
-local function postProcessAliasRelations(ctx)
-    -- 处理别名关系，将方法名和静态函数名中的别名替换为真实类名
-    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-        if aliasInfo.type == "class_definition" then
-            local targetClassName = aliasInfo.targetClass
-            
-            -- 遍历所有函数实体，替换方法名和静态函数名中的别名
+-- 导出引用关系
+local function exportReferenceRelations(ctx)
+    local relationCount = 0
+    
+    for symbolId, symbol in pairs(ctx.symbols) do
+        if symbol.refs and next(symbol.refs) then
+            -- 查找源实体
+            local sourceEntityId = nil
             for _, entity in ipairs(ctx.entities) do
-                if entity.type == 'function' then
-                    if entity.isMethod then
-                        -- 处理方法名 (aliasName:methodName -> targetClassName:methodName)
-                        local aliasPrefix = aliasName .. ":"
-                        if entity.name:sub(1, #aliasPrefix) == aliasPrefix then
-                            local methodName = entity.name:sub(#aliasPrefix + 1)
-                            entity.name = targetClassName .. ":" .. methodName
-                            entity.className = targetClassName
+                if entity.symbolId == symbolId then
+                    sourceEntityId = entity.id
+                    break
+                end
+            end
+            
+            if sourceEntityId then
+                for refId, _ in pairs(symbol.refs) do
+                    -- 查找目标实体
+                    local targetEntityId = nil
+                    for _, entity in ipairs(ctx.entities) do
+                        if entity.symbolId == refId then
+                            targetEntityId = entity.id
+                            break
                         end
-                    else
-                        -- 处理静态函数名 (aliasName.functionName -> targetClassName.functionName)
-                        local aliasPrefix = aliasName .. "."
-                        if entity.name:sub(1, #aliasPrefix) == aliasPrefix then
-                            local functionName = entity.name:sub(#aliasPrefix + 1)
-                            entity.name = targetClassName .. "." .. functionName
-                            entity.className = targetClassName
-                        end
+                    end
+                    
+                    if targetEntityId then
+                        context.addRelation(ctx, 'references', sourceEntityId, targetEntityId, {
+                            relationship = 'symbol_reference',
+                            sourceLocation = {
+                                file = nil,
+                                line = 1,
+                                column = 1
+                            }
+                        })
+                        relationCount = relationCount + 1
                     end
                 end
             end
         end
     end
+    
+    context.debug(ctx, "导出了 %d 个引用关系", relationCount)
+    return relationCount
+end
+
+-- 导出别名关系
+local function exportAliasRelations(ctx)
+    local relationCount = 0
+    
+    if ctx.symbols.aliases then
+        for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
+            -- 查找别名实体
+            local aliasEntityId = nil
+            for _, entity in ipairs(ctx.entities) do
+                if entity.symbolId == aliasInfo.symbolId then
+                    aliasEntityId = entity.id
+                    break
+                end
+            end
+            
+            -- 查找目标实体
+            local targetEntityId = nil
+            for _, entity in ipairs(ctx.entities) do
+                if entity.symbolId == aliasInfo.targetId then
+                    targetEntityId = entity.id
+                    break
+                end
+            end
+            
+            if aliasEntityId and targetEntityId then
+                context.addRelation(ctx, 'alias_of', aliasEntityId, targetEntityId, {
+                    relationship = 'type_alias',
+                    aliasType = aliasInfo.type,
+                    sourceLocation = {
+                        file = nil,
+                        line = 1,
+                        column = 1
+                    }
+                })
+                relationCount = relationCount + 1
+            end
+        end
+    end
+    
+    context.debug(ctx, "导出了 %d 个别名关系", relationCount)
+    return relationCount
 end
 
 -- 主分析函数
 function phase3.analyze(ctx)
-    print("  导出实体节点...")
+    print("🔍 第三阶段：实体关系导出")
     
-    -- 导出各类节点
-    exportFolderNodes(ctx)
-    exportModuleNodes(ctx)
-    exportClassNodes(ctx)
-    exportFunctionNodes(ctx)
-    exportVariableNodes(ctx)
+    -- 初始化节点跟踪器
+    if ctx.config.enableNodeTracking then
+        tracker3 = nodeTracker.new("phase3_export")
+    end
+    
+    print("  导出实体...")
+    
+    -- 导出各类实体
+    local moduleCount = exportModuleEntities(ctx)
+    local classCount = exportClassEntities(ctx)
+    local functionCount = exportFunctionEntities(ctx)
+    local variableCount = exportVariableEntities(ctx)
     
     print("  导出关系...")
     
     -- 导出各类关系
-    exportInheritanceRelations(ctx)
-    exportContainmentRelations(ctx)
-    exportFolderContainmentRelations(ctx)
-    
-    -- 后处理别名关系
-    postProcessAliasRelations(ctx)
+    local containmentCount = exportContainmentRelations(ctx)
+    local referenceCount = exportReferenceRelations(ctx)
+    local aliasCount = exportAliasRelations(ctx)
     
     -- 统计信息
-    local entityCount = #ctx.entities
-    local relationCount = #ctx.relations
+    local totalEntities = #ctx.entities
+    local totalRelations = #ctx.relations
     
     print(string.format("  ✅ 实体关系导出完成:"))
-    print(string.format("     实体: %d, 关系: %d", entityCount, relationCount))
+    print(string.format("    实体: %d (模块: %d, 类: %d, 函数: %d, 变量: %d)", 
+        totalEntities, moduleCount, classCount, functionCount, variableCount))
+    print(string.format("    关系: %d (包含: %d, 引用: %d, 别名: %d)", 
+        totalRelations, containmentCount, referenceCount, aliasCount))
+    
+    -- 打印节点跟踪统计
+    if ctx.config.enableNodeTracking and tracker3 then
+        nodeTracker.printStatistics(tracker3)
+    end
 end
 
 return phase3 

@@ -29,7 +29,7 @@ function base.new(sym_id, name, type, ast)
     b.id = sym_id
     b.name = name
     b.type = type
-    b.refs = {}        -- 正向引用：此符号对其他符号的引用（只存储SYMBOL_ID）
+    b.refs = {}        -- 正向引用：此符号对其他符号的引用（只存储SYMBOL_ID）- 使用hash table去重
     b.container = false
     b.parent = nil  -- 对于module，这个变量固定为nil
     b.ast = ast     -- 缓存的模块ast句柄，省去每次重新构建
@@ -94,7 +94,7 @@ local variable = {}
 function variable.new(sym_id, name, ast)
     local var = scope.new(sym_id, name, SYMBOL_TYPE.VARIABLE, ast)
     var.possibles = {}  -- 确定的类型列表（如：'string', 'number', 'boolean', 'table', 'function'）
-    var.related = {}    -- 关联的其他符号ID列表（如：A=B，那么A的related = {B的symbol_id}）
+    var.related = {}    -- 关联的其他符号ID列表（如：A=B，那么A的related = {B的symbol_id}）- 使用hash table去重
     
     -- 别名相关字段
     var.isAlias = false       -- 是否为别名
