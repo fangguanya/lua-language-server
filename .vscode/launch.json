@@ -1,159 +1,173 @@
-// A launch configuration that compiles the extension and then opens it inside a new window
 {
-	"version": "0.2.0",
-	"configurations": [
-		{
-			"name": "🍺test",
-			"type": "lua",
-			"request": "launch",
-			"stopOnEntry": false,
-			"program": "${workspaceRoot}/test.lua",
-			"luaexe": "${workspaceFolder}/bin/lua-language-server",
-			"luaVersion": "lua54",
-			"sourceCoding": "utf8",
-			"console": "integratedTerminal",
-			"internalConsoleOptions": "openOnSessionStart",
-			"outputCapture": [
-				"print",
-				"stderr",
-			],
-			"windows": {
-				"luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
-			}
-		},
-		{
-			"name": "🍄attach",
-			"type": "lua",
-			"request": "attach",
-			"stopOnEntry": false,
-			"address": "127.0.0.1:11413",
-			"outputCapture": [
-			],
-			"sourceFormat": "string",
-			"sourceMaps": [
-				[
-					"script/*",
-					"${workspaceFolder}/script/*"
-				]
-			],
-			"windows": {
-				"sourceMaps": [
-					[
-						"script\\*",
-						"${workspaceFolder}/script/*"
-					]
-				],
-			},
-		},
-		{
-			"name": "🍉build-3rd-meta",
-			"type": "lua",
-			"request": "launch",
-			"stopOnEntry": false,
-			"luaexe": "${workspaceFolder}/bin/lua-language-server",
-			"windows": {
-				"luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
-			},
-			"program": "${workspaceRoot}/tools/build-3rd-meta.lua",
-			"cpath": "${workspaceFolder}/bin/?.dll;${workspaceFolder}/bin/?.so",
-			"console": "integratedTerminal",
-			"internalConsoleOptions": "openOnSessionStart",
-			"arg": [
-			],
-			"luaVersion": "lua-latest",
-			"sourceCoding": "utf8",
-			"outputCapture": [
-				"print",
-				"stderr",
-			],
-		},
-		{
-			"name": "📝locale",
-			"type": "lua",
-			"request": "launch",
-			"stopOnEntry": false,
-			"luaexe": "${workspaceFolder}/bin/lua-language-server",
-			"windows": {
-				"luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
-			},
-			"program": "${workspaceRoot}/tools/locale.lua",
-			"cpath": "${workspaceFolder}/bin/?.dll;${workspaceFolder}/bin/?.so",
-			"console": "integratedTerminal",
-			"internalConsoleOptions": "openOnSessionStart",
-			"arg": [
-			],
-			"luaVersion": "lua-latest",
-			"sourceCoding": "utf8",
-			"outputCapture": [
-				"print",
-				"stderr",
-			],
-		},
-		{
-			"name": "🀄build-doc",
-			"type": "lua",
-			"request": "launch",
-			"stopOnEntry": false,
-			"luaexe": "${workspaceFolder}/bin/lua-language-server",
-			"windows": {
-				"luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
-			},
-			"program": "${workspaceRoot}/tools/build-doc.lua",
-			"cpath": "${workspaceFolder}/bin/?.dll;${workspaceFolder}/bin/?.so",
-			"console": "integratedTerminal",
-			"internalConsoleOptions": "openOnSessionStart",
-			"arg": [
-			],
-			"luaVersion": "lua-latest",
-			"sourceCoding": "utf8",
-			"outputCapture": [
-				"print",
-				"stderr",
-			],
-		},
-		{
-			"name": "🍖cli-check",
-			"type": "lua",
-			"request": "launch",
-			"stopOnEntry": false,
-			"program": "${workspaceRoot}/main.lua",
-			"luaexe": "${workspaceFolder}/bin/lua-language-server",
-			"windows": {
-				"luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
-			},
-			"cpath": null,
-			"arg": [
-				"--check",
-				"${workspaceRoot}",
-			],
-			"luaVersion": "lua-latest",
-			"sourceCoding": "utf8",
-			"outputCapture": [
-				"print",
-				"stderr",
-			],
-		},
-		{
-			"name": "🍤cli-doc",
-			"type": "lua",
-			"request": "launch",
-			"stopOnEntry": false,
-			"program": "${workspaceRoot}/main.lua",
-			"luaexe": "${workspaceFolder}/bin/lua-language-server",
-			"windows": {
-				"luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
-			},
-			"cpath": null,
-			"arg": [
-				"--doc",
-				"${workspaceRoot}",
-			],
-			"luaVersion": "lua-latest",
-			"sourceCoding": "utf8",
-			"outputCapture": [
-				"print",
-				"stderr",
-			],
-		},
-	]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "🍺test",
+      "type": "lua",
+      "request": "launch",
+      "stopOnEntry": false,
+      "program": "${workspaceRoot}/test.lua",
+      "luaexe": "${workspaceFolder}/bin/lua-language-server",
+      "luaVersion": "lua54",
+      "sourceCoding": "utf8",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "openOnSessionStart",
+      "outputCapture": [
+        "print",
+        "stderr"
+      ],
+      "windows": {
+        "luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
+      }
+    },
+    {
+      "name": "🍄attach",
+      "type": "lua",
+      "request": "attach",
+      "stopOnEntry": false,
+      "address": "127.0.0.1:11413",
+      "outputCapture": [],
+      "sourceFormat": "string",
+      "sourceMaps": [
+        [
+          "script/*",
+          "${workspaceFolder}/script/*"
+        ]
+      ],
+      "windows": {
+        "sourceMaps": [
+          [
+            "script\\*",
+            "${workspaceFolder}/script/*"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "🍉build-3rd-meta",
+      "type": "lua",
+      "request": "launch",
+      "stopOnEntry": false,
+      "luaexe": "${workspaceFolder}/bin/lua-language-server",
+      "windows": {
+        "luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
+      },
+      "program": "${workspaceRoot}/tools/build-3rd-meta.lua",
+      "cpath": "${workspaceFolder}/bin/?.dll;${workspaceFolder}/bin/?.so",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "openOnSessionStart",
+      "arg": [],
+      "luaVersion": "lua-latest",
+      "sourceCoding": "utf8",
+      "outputCapture": [
+        "print",
+        "stderr"
+      ]
+    },
+    {
+      "name": "📝locale",
+      "type": "lua",
+      "request": "launch",
+      "stopOnEntry": false,
+      "luaexe": "${workspaceFolder}/bin/lua-language-server",
+      "windows": {
+        "luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
+      },
+      "program": "${workspaceRoot}/tools/locale.lua",
+      "cpath": "${workspaceFolder}/bin/?.dll;${workspaceFolder}/bin/?.so",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "openOnSessionStart",
+      "arg": [],
+      "luaVersion": "lua-latest",
+      "sourceCoding": "utf8",
+      "outputCapture": [
+        "print",
+        "stderr"
+      ]
+    },
+    {
+      "name": "🀄build-doc",
+      "type": "lua",
+      "request": "launch",
+      "stopOnEntry": false,
+      "luaexe": "${workspaceFolder}/bin/lua-language-server",
+      "windows": {
+        "luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
+      },
+      "program": "${workspaceRoot}/tools/build-doc.lua",
+      "cpath": "${workspaceFolder}/bin/?.dll;${workspaceFolder}/bin/?.so",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "openOnSessionStart",
+      "arg": [],
+      "luaVersion": "lua-latest",
+      "sourceCoding": "utf8",
+      "outputCapture": [
+        "print",
+        "stderr"
+      ]
+    },
+    {
+      "name": "🍖cli-check",
+      "type": "lua",
+      "request": "launch",
+      "stopOnEntry": false,
+      "program": "${workspaceRoot}/main.lua",
+      "luaexe": "${workspaceFolder}/bin/lua-language-server",
+      "windows": {
+        "luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
+      },
+      "cpath": null,
+      "arg": [
+        "--check",
+        "${workspaceRoot}"
+      ],
+      "luaVersion": "lua-latest",
+      "sourceCoding": "utf8",
+      "outputCapture": [
+        "print",
+        "stderr"
+      ]
+    },
+    {
+      "name": "🍤cli-doc",
+      "type": "lua",
+      "request": "launch",
+      "stopOnEntry": false,
+      "program": "${workspaceRoot}/main.lua",
+      "luaexe": "${workspaceFolder}/bin/lua-language-server",
+      "windows": {
+        "luaexe": "${workspaceFolder}/bin/lua-language-server.exe"
+      },
+      "cpath": null,
+      "arg": [
+        "--doc",
+        "${workspaceRoot}"
+      ],
+      "luaVersion": "lua-latest",
+      "sourceCoding": "utf8",
+      "outputCapture": [
+        "print",
+        "stderr"
+      ]
+    },
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "cppdbg",
+      "request": "launch",
+      "args": [],
+      "stopAtEntry": false,
+      "externalConsole": true,
+      "cwd": "l:/ai-lualanguageserver/3rd/EmmyLuaCodeStyle/CodeFormat/src",
+      "program": "l:/ai-lualanguageserver/3rd/EmmyLuaCodeStyle/CodeFormat/src/build/Debug/outDebug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ]
 }

@@ -3,6 +3,32 @@
 
 local WeaponClass = DefineClass("Weapon")
 local TmpResult = WeaponClass
+TmpAAA=TmpResult
+TmpAAA['a']=1
+TmpAAA['b']="hhh"
+TmpAAA['func_a']=function()
+    return 1
+end
+local TestAlias = TmpResult
+TestAlias = TmpAAA
+TestAlias = TmpAAA.b
+TestAlias = TmpAAA.func_a
+
+local alias_a = TmpAAA.a
+function TmpAAA:func_c()
+    self.attr_c="aaa"
+    
+    return 'c'
+end
+function TmpAAA.func_b()
+    return "b"
+end
+local function l_func_a()
+    return 'a'
+end
+function l_func_b()
+    return 'b'
+end
 
 function TmpResult:__init(name, damage, durability, in_type)
     local TmpClass1 = require("logic.player")
@@ -44,8 +70,8 @@ end
 
 -- 修理武器
 function TmpResult:Repair(amount)
-    amount = amount or 10
-    self.durability = math.min(self.durability + amount, self.max_durability)
+    local amount1111 = amount or 10
+    self.durability = math.min(self.durability + amount1111, self.max_durability)
     print("Repaired " .. self.name .. ". Durability: " .. self.durability)
 end
 
