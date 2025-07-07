@@ -215,16 +215,13 @@ end
 
 -- 添加实体
 function context.addEntity(ctx, entityType, entityData)
-    local id = context.generateId(ctx, "entity")
-    entityData.id = id
     entityData.type = entityType
     table.insert(ctx.entities, entityData)
     ctx.statistics.totalEntities = ctx.statistics.totalEntities + 1
-    return id
 end
 
 -- 添加关系
-function context.addRelation(ctx, relationType, fromId, toId, metadata)
+function context.addRelation(ctx, relationType, fromId, toId)
     -- 过滤type_relation类型的关系
     if relationType == 'type_relation' then
         context.debug(ctx, "过滤type_relation关系: %s -> %s", fromId, toId)
@@ -237,17 +234,13 @@ function context.addRelation(ctx, relationType, fromId, toId, metadata)
         return nil
     end
     
-    local id = context.generateId(ctx, "relation")
     local relation = {
-        id = id,
         type = relationType,
         from = fromId,
-        to = toId,
-        metadata = metadata or {}
+        to = toId
     }
     table.insert(ctx.relations, relation)
     ctx.statistics.totalRelations = ctx.statistics.totalRelations + 1
-    return id
 end
 
 -- 添加符号
@@ -465,6 +458,7 @@ local function deepClean(obj, visited)
             elseif keyType == 'number' then
                 hasNumberKeys = true
             end
+            -- 其他类型的键（如表、函数等）会被跳过，不影响键类型判断
         end
         
         -- 如果有混合键类型，只保留字符串键
@@ -516,10 +510,9 @@ end
 -- 创建可序列化的符号数据（移除函数引用）
 function context.getSerializableSymbols(ctx)
     local serializableSymbols = {}
-    local reservedAst = {}
     for _, symbol in pairs(ctx.symbols) do
-        reservedAst[symbol] = symbol.ast
         symbol.ast = nil
+        symbol.state = nil
     end
     
     for id, symbol in pairs(ctx.symbols) do
@@ -538,9 +531,6 @@ function context.getSerializableSymbols(ctx)
         end
     end
     
-    for symbol, ast  in pairs(reservedAst) do
-        symbol.ast = ast
-    end
     return serializableSymbols
 end
 

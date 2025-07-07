@@ -1333,8 +1333,8 @@ function consolidateTypeAliases(ctx)
     end
 
     
-    print(string.format("    整理了 %d 个类型别名，移动了 %d 个方法和 %d 个变量", 
-        aliasCount, movedMethods, movedVariables))
+    context.debug(ctx, "    整理了 %d 个类型别名，移动了 %d 个方法和 %d 个变量", 
+        aliasCount, movedMethods, movedVariables)
 end
 
 -- 递归收集CLASS类型符号的所有后继符号
@@ -1486,17 +1486,17 @@ local function resolveParentClassRelations(ctx)
     end
     
     context.debug(ctx, "父类关系验证完成：处理 %d 个父类", processedCount)
-    print(string.format("    父类关系验证：处理 %d 个父类", processedCount))
+    context.debug(ctx, "    父类关系验证：处理 %d 个父类", processedCount)
     
     -- 输出验证后的父类关系
-    if processedCount > 0 then
-        print("    验证后的父类关系:")
-        for className, classSymbol in pairs(ctx.classes) do
-            if classSymbol.parentClasses and #classSymbol.parentClasses > 0 then
-                print(string.format("      %s -> %s", className, table.concat(classSymbol.parentClasses, ", ")))
-            end
-        end
-    end
+    -- if processedCount > 0 then
+    --     print("    验证后的父类关系:")
+    --     for className, classSymbol in pairs(ctx.classes) do
+    --         if classSymbol.parentClasses and #classSymbol.parentClasses > 0 then
+    --             print(string.format("      %s -> %s", className, table.concat(classSymbol.parentClasses, ", ")))
+    --         end
+    --     end
+    -- end
     
     return processedCount
 end
@@ -1598,7 +1598,7 @@ function phase1.analyze(ctx)
     
     -- 输出节点去重统计信息
     local dedupStats = context.getDeduplicationStats(ctx)
-    print(string.format("🔒 节点去重统计: 总处理节点数 %d", dedupStats.totalProcessedNodes))
+    context.debug(ctx, "🔒 节点去重统计: 总处理节点数 %d", dedupStats.totalProcessedNodes)
     context.debug(ctx, "🔒 节点去重统计: 总处理节点数 %d", dedupStats.totalProcessedNodes)
     
     -- 输出节点处理跟踪统计

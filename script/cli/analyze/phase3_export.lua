@@ -39,23 +39,11 @@ local function exportModuleEntities(ctx)
             end
         end
         
-        local entityId = context.addEntity(ctx, 'module', {
-            name = module.name,
-            symbolId = module.id,
-            filePath = filePath,
-            classes = module.classes or {},
-            methods = module.methods or {},
-            variables = module.variables or {},
-            category = 'module',
-            sourceLocation = {
-                file = filePath,
-                line = 1,
-                column = 1
-            }
+        context.addEntity(ctx, 'module', {
+            symbolId = module.id
         })
         
         moduleCount = moduleCount + 1
-        context.debug(ctx, "导出模块实体: %s (ID: %s)", module.name, entityId)
     end
     
     context.debug(ctx, "导出了 %d 个模块实体", moduleCount)
@@ -78,22 +66,11 @@ local function exportClassEntities(ctx)
             end
         end
         
-        local entityId = context.addEntity(ctx, 'class', {
-            name = class.name,
-            symbolId = class.id,
-            parentId = class.parent and class.parent.id or nil,
-            methods = class.methods or {},
-            variables = class.variables or {},
-            category = 'class',
-            sourceLocation = {
-                file = filePath,
-                line = 1, -- 类的具体位置需要从AST中获取
-                column = 1
-            }
+        context.addEntity(ctx, 'class', {
+            symbolId = class.id
         })
         
         classCount = classCount + 1
-        context.debug(ctx, "导出类实体: %s (ID: %s)", class.name, entityId)
     end
     
     context.debug(ctx, "导出了 %d 个类实体", classCount)
@@ -117,25 +94,11 @@ local function exportFunctionEntities(ctx)
                 end
             end
             
-            local entityId = context.addEntity(ctx, 'function', {
-                name = symbol.name,
-                symbolId = symbol.id,
-                parentId = symbol.parent and symbol.parent.id or nil,
-                parentName = symbol.parent and symbol.parent.name or nil,
-                isAnonymous = symbol:IsAnonymous(),
-                parameters = symbol.parameters or {},
-                variables = symbol.variables or {},
-                functionBody = symbol.functionBody or "", -- 使用在phase1中提取的函数代码段，如果为nil则使用空字符串
-                category = 'function',
-                sourceLocation = {
-                    file = filePath,
-                    line = 1, -- 函数的具体位置需要从AST中获取
-                    column = 1
-                }
+            context.addEntity(ctx, 'function', {
+                symbolId = symbol.id
             })
             
             functionCount = functionCount + 1
-            context.debug(ctx, "导出函数实体: %s (ID: %s)", symbol.name, entityId)
         end
     end
     
@@ -149,44 +112,9 @@ local function exportVariableEntities(ctx)
     
     for id, symbol in pairs(ctx.symbols) do
         if symbol.type == SYMBOL_TYPE.VARIABLE then
-            local entity = {
-                id = id,
-                name = symbol.name,
-                type = "variable",
-                metadata = {
-                    position = symbol.position,
-                    isGlobal = symbol.isGlobal,
-                    isLocal = symbol.isLocal,
-                    isParameter = symbol.isParameter,
-                    parameterIndex = symbol.parameterIndex,
-                    isSelf = symbol.isSelf,
-                    possibleTypes = {},
-                    relatedSymbols = {}
-                }
-            }
-            
-            -- 添加可能的类型
-            if symbol.possibles then
-                for possibleType, _ in pairs(symbol.possibles) do
-                    table.insert(entity.metadata.possibleTypes, possibleType)
-                end
-            end
-            
-            -- 添加关联的符号
-            if symbol.related then
-                for relatedId, _ in pairs(symbol.related) do
-                    table.insert(entity.metadata.relatedSymbols, relatedId)
-                end
-            end
-            
-            -- 添加别名信息
-            if symbol.isAlias then
-                entity.metadata.isAlias = true
-                entity.metadata.aliasTarget = symbol.aliasTarget
-                entity.metadata.aliasTargetName = symbol.aliasTargetName
-            end
-            
-            ctx.entities[id] = entity
+            context.addEntity(ctx, 'variable', {
+                symbolId = id
+            })
             variableCount = variableCount + 1
         end
     end
@@ -223,14 +151,7 @@ local function exportContainmentRelations(ctx)
                     end
                     
                     if classEntityId then
-                        context.addRelation(ctx, 'contains', moduleEntityId, classEntityId, {
-                            relationship = 'module_contains_class',
-                            sourceLocation = {
-                                file = nil,
-                                line = 1,
-                                column = 1
-                            }
-                        })
+                        context.addRelation(ctx, 'contains', moduleEntityId, classEntityId)
                         relationCount = relationCount + 1
                     end
                 end
@@ -260,14 +181,7 @@ local function exportContainmentRelations(ctx)
                     end
                     
                     if functionEntityId then
-                        context.addRelation(ctx, 'contains', moduleEntityId, functionEntityId, {
-                            relationship = 'module_contains_function',
-                            sourceLocation = {
-                                file = nil,
-                                line = 1,
-                                column = 1
-                            }
-                        })
+                        context.addRelation(ctx, 'contains', moduleEntityId, functionEntityId)
                         relationCount = relationCount + 1
                     end
                 end
@@ -299,14 +213,7 @@ local function exportContainmentRelations(ctx)
                     end
                     
                     if functionEntityId then
-                        context.addRelation(ctx, 'contains', classEntityId, functionEntityId, {
-                            relationship = 'class_contains_method',
-                            sourceLocation = {
-                                file = nil,
-                                line = 1,
-                                column = 1
-                            }
-                        })
+                        context.addRelation(ctx, 'contains', classEntityId, functionEntityId)
                         relationCount = relationCount + 1
                     end
                 end
@@ -345,14 +252,7 @@ local function exportReferenceRelations(ctx)
                     end
                     
                     if targetEntityId then
-                        context.addRelation(ctx, 'references', sourceEntityId, targetEntityId, {
-                            relationship = 'symbol_reference',
-                            sourceLocation = {
-                                file = nil,
-                                line = 1,
-                                column = 1
-                            }
-                        })
+                        context.addRelation(ctx, 'references', sourceEntityId, targetEntityId)
                         relationCount = relationCount + 1
                     end
                 end
@@ -389,15 +289,7 @@ local function exportAliasRelations(ctx)
             end
             
             if aliasEntityId and targetEntityId then
-                context.addRelation(ctx, 'alias_of', aliasEntityId, targetEntityId, {
-                    relationship = 'type_alias',
-                    aliasType = aliasInfo.type,
-                    sourceLocation = {
-                        file = nil,
-                        line = 1,
-                        column = 1
-                    }
-                })
+                context.addRelation(ctx, 'alias_of', aliasEntityId, targetEntityId)
                 relationCount = relationCount + 1
             end
         end
@@ -451,15 +343,7 @@ local function exportInheritanceRelations(ctx)
                     end
                     
                     if parentEntityId then
-                        context.addRelation(ctx, 'inherits', childEntityId, parentEntityId, {
-                            relationship = 'class_inheritance',
-                            parentName = parentName,
-                            sourceLocation = {
-                                file = nil,
-                                line = 1,
-                                column = 1
-                            }
-                        })
+                        context.addRelation(ctx, 'inherits', childEntityId, parentEntityId)
                         relationCount = relationCount + 1
                         context.debug(ctx, "继承关系: %s -> %s", className, parentName)
                     else

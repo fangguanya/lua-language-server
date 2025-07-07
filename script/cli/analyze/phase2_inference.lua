@@ -88,10 +88,42 @@ local function getAllPossibleTypeNames(ctx, symbolId)
 end
 
 -- 记录call信息
-local function recordCallInfo(ctx, uri, moduleId, source)
-    local callName = utils.getCallName(source)
+local function recordCallInfo(ctx, uri, moduleId, source, providedCallName)
+    local callName = providedCallName or utils.getCallName(source)
     if not callName then
-        return
+        -- 特殊处理getmethod类型的调用
+        if source and source.type == 'call' and source.node and source.node.type == 'getmethod' then
+            local objNode = source.node.node
+            local methodNode = source.node.method
+            local obj = utils.getNodeName(objNode)
+            local method = utils.getNodeName(methodNode)
+            
+            if method then
+                -- 如果obj为nil，尝试其他方式获取对象名
+                if not obj and objNode then
+                    if objNode.type == 'getlocal' then
+                        obj = objNode[1]  -- 直接获取变量名
+                    elseif objNode.type == 'getglobal' then
+                        obj = objNode[1]  -- 直接获取全局变量名
+                    elseif objNode.type == 'getfield' then
+                        -- 可能是复杂的字段访问
+                        local baseObj = utils.getNodeName(objNode.node)
+                        local field = utils.getNodeName(objNode.field)
+                        if baseObj and field then
+                            obj = baseObj .. '.' .. field
+                        end
+                    end
+                end
+                
+                if obj and method then
+                    callName = obj .. ':' .. method
+                end
+            end
+        end
+        
+        if not callName then
+            return
+        end
     end
     
     local position = utils.getNodePosition(source)
@@ -125,6 +157,9 @@ local function recordCallInfo(ctx, uri, moduleId, source)
             end
         end
     end
+    
+    -- 如果直接查找失败，说明符号不存在，记录为未解析调用
+    -- 第一阶段已经建立了完整的符号表，如果找不到就是真的不存在
     
     -- 分析参数信息
     local parameters = {}
@@ -268,8 +303,7 @@ local function recordAllCallInfos(ctx)
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
     
-    print(string.format("  📞 第1轮操作：遍历所有AST，记录call信息"))
-    print(string.format("    发现 %d 个Lua文件", totalFiles))
+
     
     -- 初始化节点跟踪器
     if ctx.config.enableNodeTracking then
@@ -283,6 +317,7 @@ local function recordAllCallInfos(ctx)
             local moduleId = utils.getModulePath(uri, ctx.rootUri)
             
             -- 遍历所有调用节点
+
             guide.eachSource(module.ast, function(source)
                 -- 每次处理新的源节点时，增加调用帧索引
                 ctx.currentFrameIndex = ctx.currentFrameIndex + 1
@@ -292,21 +327,36 @@ local function recordAllCallInfos(ctx)
                     nodeTracker.recordNode(tracker1, source)
                 end
                 
+                -- 处理getmethod节点 - 这些可能是方法调用的一部分
+                if source.type == 'getmethod' then
+                    -- 检查这个getmethod是否是call的一部分
+                    local parent = source.parent
+                    if parent and parent.type == 'call' and parent.node == source then
+                        -- 这是一个方法调用！直接处理
+                        local objNode = source.node
+                        local methodNode = source.method
+                        local obj = utils.getNodeName(objNode)
+                        local method = utils.getNodeName(methodNode)
+                        
+
+                        
+                        if obj and method then
+                            local callName = obj .. ':' .. method
+                            recordCallInfo(ctx, uri, moduleId, parent, callName)
+                        end
+                    end
+                end
+                
                 if source.type == 'call' then
                     recordCallInfo(ctx, uri, moduleId, source)
                 end
             end)
         end
         
-        -- 显示进度
-        if i % 10 == 0 or i == totalFiles then
-            print(string.format("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
-        end
+
     end
     
-    print(string.format("  ✅ call信息记录完成: 总计 %d 个调用", ctx.calls.callStatistics.totalCalls))
-    print(string.format("    已解析: %d, 未解析: %d", 
-        ctx.calls.callStatistics.resolvedCalls, ctx.calls.callStatistics.unresolvedCalls))
+
 end
 
 -- 添加类型到possibles哈希表，确保去重和别名处理
@@ -456,15 +506,7 @@ local function buildReferenceRelations(ctx)
                 local refSymbol = ctx.symbols[refId]
                 if refSymbol and symbolId ~= refId then
                     -- 创建引用关系
-                    local relationId = context.addRelation(ctx, 'reference', symbolId, refId, {
-                        relationship = 'symbol_reference',
-                        fromName = symbol.aliasTargetName or symbol.name,  -- 使用最终名称
-                        toName = refSymbol.aliasTargetName or refSymbol.name,  -- 使用最终名称
-                        sourceLocation = {
-                            line = symbol.position and symbol.position.line or 0,
-                            column = symbol.position and symbol.position.column or 0
-                        }
-                    })
+                    local relationId = context.addRelation(ctx, 'reference', symbolId, refId)
                     
                     referenceRelationCount = referenceRelationCount + 1
                     context.debug(ctx, "    建立引用关系: %s -> %s", 
@@ -542,7 +584,7 @@ local function performDataFlowAnalysis(ctx)
     -- 重置节点去重状态
     context.resetProcessedNodes(ctx, "Phase2-Round2")
     
-    print(string.format("  🔄 第2轮操作：数据流分析"))
+
     
     -- 初始化节点跟踪器
     if ctx.config.enableNodeTracking then
@@ -561,15 +603,12 @@ local function performDataFlowAnalysis(ctx)
     -- 4. 建立类型间调用关系汇总
     local typeCallSummaryCount = buildTypeCallSummary(ctx)
     
-    print(string.format("  ✅ 数据流分析完成:"))
-    print(string.format("    引用关系: %d", referenceRelationCount))
-    print(string.format("    类型调用关系汇总: %d", typeCallSummaryCount))
-    print(string.format("    总关系数: %d", ctx.statistics.totalRelations))
+
 end
 
 -- 第二阶段：类型推断和数据流分析
 function phase2.analyze(ctx)
-    print("🔄 开始第二阶段：类型推断和数据流分析")
+
     
     -- 第1轮操作：遍历AST记录call信息
     recordAllCallInfos(ctx)
@@ -584,7 +623,7 @@ function phase2.analyze(ctx)
         end
     end
     
-    print("✅ 第二阶段完成")
+
 end
 
 return phase2 
