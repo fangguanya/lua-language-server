@@ -15,59 +15,13 @@ local symbol = require 'cli.analyze.symbol'
 
 local phase3 = {}
 
+-- 导入符号类型常量
+local SYMBOL_TYPE = symbol.SYMBOL_TYPE
+
 -- 节点跟踪器
 local tracker3 = nil
 
--- 提取函数体代码
-local function extractFunctionBody(ctx, symbol)
-    if not symbol.ast then
-        return nil
-    end
-    
-    local ast = symbol.ast
-    if not ast.start or not ast.finish then
-        return nil
-    end
-    
-    -- 查找对应的文件URI
-    local fileUri = nil
-    if symbol.parent and ctx.uriToModule then
-        for uri, mod in pairs(ctx.uriToModule) do
-            if mod.id == symbol.parent.id then
-                fileUri = uri
-                break
-            end
-        end
-    end
-    
-    if not fileUri then
-        return nil
-    end
-    
-    -- 获取文件内容
-    local filePath = furi.decode(fileUri)
-    local file = io.open(filePath, 'r')
-    if not file then
-        return nil
-    end
-    
-    local content = file:read('*all')
-    file:close()
-    
-    if not content then
-        return nil
-    end
-    
-    -- 提取函数代码段
-    local startPos = ast.start
-    local endPos = ast.finish
-    
-    if startPos and endPos and startPos <= #content and endPos <= #content then
-        return content:sub(startPos, endPos)
-    end
-    
-    return nil
-end
+
 
 -- 导出模块实体
 local function exportModuleEntities(ctx)
@@ -163,9 +117,6 @@ local function exportFunctionEntities(ctx)
                 end
             end
             
-            -- 提取函数体代码
-            local functionBody = extractFunctionBody(ctx, symbol)
-            
             local entityId = context.addEntity(ctx, 'function', {
                 name = symbol.name,
                 symbolId = symbol.id,
@@ -174,7 +125,7 @@ local function exportFunctionEntities(ctx)
                 isAnonymous = symbol:IsAnonymous(),
                 parameters = symbol.parameters or {},
                 variables = symbol.variables or {},
-                functionBody = functionBody, -- 添加完整的函数代码段
+                functionBody = symbol.functionBody or "", -- 使用在phase1中提取的函数代码段，如果为nil则使用空字符串
                 category = 'function',
                 sourceLocation = {
                     file = filePath,

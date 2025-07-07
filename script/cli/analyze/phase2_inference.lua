@@ -443,67 +443,6 @@ local function inferTypesFromCalls(ctx)
     context.debug(ctx, "✅ 基于call信息的类型推断完成，推断了%d个类型", inferredCount)
 end
 
--- 建立类型间关系
-local function buildTypeRelations(ctx)
-    local relationCount = 0
-    
-    context.debug(ctx, "🔄 开始建立类型间关系")
-    
-    if not ctx.relations then
-        ctx.relations = {}
-    end
-    
-    for symbolId, symbol in pairs(ctx.symbols) do
-        if symbol.possibles and next(symbol.possibles) then
-            for possibleType, _ in pairs(symbol.possibles) do
-                -- 解析别名，获取最终类型
-                local finalType = possibleType
-                local aliasTarget = nil
-                
-                if ctx.symbols.aliases then
-                    for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-                        if aliasName == possibleType then
-                            finalType = aliasInfo.targetName or aliasInfo.target or possibleType
-                            aliasTarget = finalType
-                            break
-                        end
-                    end
-                end
-                
-                -- 建立类型关系
-                local relation = {
-                    type = "type_relation",
-                    from = symbol.name or symbolId,
-                    to = finalType,
-                    aliasTarget = aliasTarget
-                }
-                
-                table.insert(ctx.relations, relation)
-                relationCount = relationCount + 1
-                
-                context.debug(ctx, "    建立类型关系: %s -> %s (别名: %s)", 
-                    relation.from, relation.to, aliasTarget or "nil")
-            end
-        end
-    end
-    
-    context.debug(ctx, "✅ 类型间关系建立完成，共%d个关系", relationCount)
-    return relationCount
-end
-
--- 建立函数间调用关系 (禁用，由第四阶段处理)
-local function buildFunctionCallRelations(ctx)
-    context.debug(ctx, "🔄 跳过函数间调用关系建立 (由第四阶段处理)")
-    
-    local functionRelationCount = 0
-    
-    -- 第二阶段不再创建函数调用关系，交给第四阶段处理
-    -- 这样可以确保使用正确的类型名而不是变量名
-    
-    context.debug(ctx, "✅ 函数间调用关系建立跳过，共%d个关系", functionRelationCount)
-    return functionRelationCount
-end
-
 -- 建立引用关系
 local function buildReferenceRelations(ctx)
     context.debug(ctx, "🔄 开始建立引用关系")
@@ -617,16 +556,12 @@ local function performDataFlowAnalysis(ctx)
     inferTypesFromCalls(ctx)
     
     -- 3. 建立不同类型的关系
-    local typeRelationCount = buildTypeRelations(ctx)
-    local functionRelationCount = buildFunctionCallRelations(ctx)
     local referenceRelationCount = buildReferenceRelations(ctx)
     
     -- 4. 建立类型间调用关系汇总
     local typeCallSummaryCount = buildTypeCallSummary(ctx)
     
     print(string.format("  ✅ 数据流分析完成:"))
-    print(string.format("    类型关系: %d", typeRelationCount))
-    print(string.format("    函数关系: %d", functionRelationCount))
     print(string.format("    引用关系: %d", referenceRelationCount))
     print(string.format("    类型调用关系汇总: %d", typeCallSummaryCount))
     print(string.format("    总关系数: %d", ctx.statistics.totalRelations))

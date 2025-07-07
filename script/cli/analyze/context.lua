@@ -480,8 +480,14 @@ local function deepClean(obj, visited)
                 
                 if cleanKey ~= nil then
                     -- 对于空表也要保留（如空的references或refs数组）
-                    if cleanValue ~= nil or (type(value) == 'table' and next(value) == nil) then
-                        cleaned[cleanKey] = cleanValue or {}
+                    -- 特殊处理：保留functionBody字段，即使它为nil
+                    if cleanValue ~= nil or (type(value) == 'table' and next(value) == nil) or cleanKey == 'functionBody' then
+                        if cleanKey == 'functionBody' then
+                            -- 对于functionBody字段，即使为nil也要保留
+                            cleaned[cleanKey] = cleanValue
+                        else
+                            cleaned[cleanKey] = cleanValue or {}
+                        end
                     end
                 end
             end

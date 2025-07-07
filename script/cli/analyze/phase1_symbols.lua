@@ -546,8 +546,46 @@ function analyzeFunctionDefinition(ctx, uri, module, source)
     end
 end
 
+-- 提取函数体代码
+local function extractFunctionBody(ctx, uri, funcSource)
+    if not funcSource.start or not funcSource.finish then
+        return nil
+    end
+    
+    -- 获取文件内容和AST状态
+    local text = files.getText(uri)
+    if not text then
+        return nil
+    end
+    
+    local state = files.getState(uri)
+    if not state then
+        return nil
+    end
+    
+    -- 使用guide.positionToOffset将编码位置转换为实际偏移量
+    local startOffset = guide.positionToOffset(state, funcSource.start)
+    local finishOffset = guide.positionToOffset(state, funcSource.finish)
+    
+    if startOffset and finishOffset and startOffset <= #text and finishOffset <= #text and startOffset <= finishOffset then
+        local body = text:sub(startOffset + 1, finishOffset)  -- Lua字符串索引从1开始
+        return body
+    end
+    
+    return nil
+end
+
 -- 分析函数体
 function analyzeFunctionBody(ctx, uri, module, method, funcSource)
+    -- 提取函数体代码并存储到method中
+    local functionBody = extractFunctionBody(ctx, uri, funcSource)
+    if functionBody then
+        method.functionBody = functionBody
+        context.debug(ctx, "提取函数体: %s (%d字符)", method.name, #functionBody)
+    else
+        context.debug(ctx, "函数体提取失败: %s", method.name)
+    end
+    
     -- 分析函数参数
     if funcSource.args then
         for i, arg in ipairs(funcSource.args) do
@@ -589,24 +627,11 @@ function parseParentClass(ctx, arg, module)
             -- 尝试在当前符号表中查找对应的类或变量
             local symbolId, _ = context.findSymbolByName(ctx, parentName, module)
             if symbolId then
-                return {
-                    type = 'resolved_symbol',
-                    name = parentName,
-                    resolved = true,
-                    source = arg,
-                    symbolId = symbolId,
-                    description = string.format("已解析字符串父类: %s -> %s", parentName, symbolId)
-                }
+                context.debug(ctx, "字符串父类: %s -> %s", parentName, symbolId)
+                return symbolId
             else
-                -- 保留字符串名称
-                return {
-                    type = 'string',
-                    name = parentName,
-                    resolved = true,
-                    source = arg,
-                    symbolId = parentName, -- 使用字符串名称作为标识
-                    description = string.format("字符串父类: %s", parentName)
-                }
+                context.debug(ctx, "字符串父类(字符串): %s", parentName)
+                return parentName
             end
         end
     elseif argType == 'getlocal' or argType == 'getglobal' then
@@ -616,24 +641,11 @@ function parseParentClass(ctx, arg, module)
             -- 查找变量的symbol_id
             local varSymbolId, _ = context.findVariableSymbol(ctx, varName, module)
             if varSymbolId then
-                return {
-                    type = 'resolved_symbol',
-                    name = varName,
-                    resolved = true,
-                    source = arg,
-                    symbolId = varSymbolId,
-                    description = string.format("已解析变量父类: %s -> %s", varName, varSymbolId)
-                }
+                context.debug(ctx, "变量父类: %s -> %s", varName, varSymbolId)
+                return varSymbolId
             else
-                -- 如果找不到symbol_id，使用字符串名称
-                return {
-                    type = 'string',
-                    name = varName,
-                    resolved = true,
-                    source = arg,
-                    symbolId = varName, -- 使用字符串名称作为标识
-                    description = string.format("变量父类(未找到符号): %s", varName)
-                }
+                context.debug(ctx, "变量父类(字符串): %s", varName)
+                return varName
             end
         end
     elseif argType == 'call' then
@@ -643,24 +655,37 @@ function parseParentClass(ctx, arg, module)
             -- 尝试查找函数的symbol_id
             local funcSymbolId, _ = context.findSymbolByName(ctx, callName, module)
             if funcSymbolId then
-                return {
-                    type = 'resolved_symbol',
-                    name = callName,
-                    resolved = true,
-                    source = arg,
-                    symbolId = funcSymbolId,
-                    description = string.format("已解析函数调用父类: %s() -> %s", callName, funcSymbolId)
-                }
+                context.debug(ctx, "函数调用父类: %s -> %s", callName, funcSymbolId)
+                return funcSymbolId
             else
-                -- 使用函数名作为字符串标识
-                return {
-                    type = 'string',
-                    name = callName,
-                    resolved = true,
-                    source = arg,
-                    symbolId = callName, -- 使用函数名作为标识
-                    description = string.format("函数调用父类: %s()", callName)
-                }
+                context.debug(ctx, "函数调用父类(字符串): %s", callName)
+                return callName
+            end
+        end
+    elseif argType == 'getfield' then
+        -- 字段引用形式的父类 (如 base.BaseEntity)
+        local objName = utils.getNodeName(arg.node)
+        local fieldName = utils.getNodeName(arg.field)
+        if objName and fieldName then
+            local fullName = objName .. "." .. fieldName
+            -- 查找字段的symbol_id
+            local fieldSymbolId, _ = context.findSymbolByName(ctx, fullName, module)
+            if fieldSymbolId then
+                context.debug(ctx, "getfield父类: %s -> %s", fullName, fieldSymbolId)
+                return fieldSymbolId
+            else
+                -- 尝试查找对象中的字段
+                local objSymbolId, objSymbol = context.findVariableSymbol(ctx, objName, module)
+                if objSymbol then
+                    -- 在对象作用域内查找字段
+                    local targetFieldSymbolId, _ = context.resolveName(ctx, fieldName, objSymbol)
+                    if targetFieldSymbolId then
+                        context.debug(ctx, "getfield父类(对象字段): %s.%s -> %s", objName, fieldName, targetFieldSymbolId)
+                        return targetFieldSymbolId
+                    end
+                end
+                context.debug(ctx, "getfield父类(字符串): %s", fullName)
+                return fullName
             end
         end
     elseif argType == 'binary' then
@@ -670,14 +695,7 @@ function parseParentClass(ctx, arg, module)
             local leftName = utils.getNodeName(arg[1]) or "?"
             local rightName = utils.getNodeName(arg[2]) or "?"
             local exprName = string.format("%s_%s_%s", leftName, operator, rightName)
-            return {
-                type = 'string',
-                name = exprName,
-                resolved = true,
-                source = arg,
-                symbolId = exprName, -- 使用表达式作为标识
-                description = string.format("表达式父类: (%s %s %s)", leftName, operator, rightName)
-            }
+            return exprName
         end
     elseif argType == 'table' then
         -- 表形式的组件列表（如 {ComponentA, ComponentB}）
@@ -740,14 +758,8 @@ function parseParentClass(ctx, arg, module)
     end
     
     -- 未知类型，使用类型名作为字符串标识
-    return {
-        type = 'string',
-        name = argType,
-        resolved = true,
-        source = arg,
-        symbolId = argType, -- 使用类型名作为标识
-        description = string.format("未知类型: <%s>", argType)
-    }
+    context.debug(ctx, "未知父类类型: %s", argType)
+    return argType
 end
 
 -- 分析函数调用表达式
@@ -808,20 +820,9 @@ function analyzeCallExpression(ctx, uri, module, source)
                                     context.debug(ctx, "父类关系（组件）: %s -> %s", className, componentId)
                                 end
                             else
-                                -- 单个父类，提取symbolId或name
-                                local parentId = nil
-                                if type(parentResult) == 'table' and parentResult.symbolId then
-                                    parentId = parentResult.symbolId
-                                elseif type(parentResult) == 'table' and parentResult.name then
-                                    parentId = parentResult.name
-                                else
-                                    parentId = parentResult
-                                end
-                                
-                                if parentId then
-                                    table.insert(class.parentClasses, parentId)
-                                    context.debug(ctx, "父类关系: %s -> %s", className, parentId)
-                                end
+                                -- 单个父类，直接使用返回值
+                                table.insert(class.parentClasses, parentResult)
+                                context.debug(ctx, "父类关系: %s -> %s", className, parentResult)
                             end
                         end
                     end
