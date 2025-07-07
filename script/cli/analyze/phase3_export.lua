@@ -147,59 +147,51 @@ end
 local function exportVariableEntities(ctx)
     local variableCount = 0
     
-    for symbolId, symbol in pairs(ctx.symbols) do
+    for id, symbol in pairs(ctx.symbols) do
         if symbol.type == SYMBOL_TYPE.VARIABLE then
-            local filePath = nil
-            if symbol.parent and ctx.uriToModule then
-                -- 查找对应的URI
-                for uri, mod in pairs(ctx.uriToModule) do
-                    if mod.id == symbol.parent.id then
-                        filePath = furi.decode(uri)
-                        break
-                    end
-                end
-            end
+            local entity = {
+                id = id,
+                name = symbol.name,
+                type = "variable",
+                metadata = {
+                    position = symbol.position,
+                    isGlobal = symbol.isGlobal,
+                    isLocal = symbol.isLocal,
+                    isParameter = symbol.isParameter,
+                    parameterIndex = symbol.parameterIndex,
+                    isSelf = symbol.isSelf,
+                    possibleTypes = {},
+                    relatedSymbols = {}
+                }
+            }
             
-            -- 获取变量的推断类型
-            local inferredType = nil
-            if ctx.types.inferred[symbolId] then
-                inferredType = ctx.types.inferred[symbolId].type
-            end
-            
-            -- 将 possibles 哈希表转换为数组（为了兼容性）
-            local possiblesArray = {}
+            -- 添加可能的类型
             if symbol.possibles then
                 for possibleType, _ in pairs(symbol.possibles) do
-                    table.insert(possiblesArray, possibleType)
+                    table.insert(entity.metadata.possibleTypes, possibleType)
                 end
             end
             
-            local entityId = context.addEntity(ctx, 'variable', {
-                name = symbol.name,
-                symbolId = symbol.id,
-                parentId = symbol.parent and symbol.parent.id or nil,
-                parentName = symbol.parent and symbol.parent.name or nil,
-                possibles = possiblesArray,
-                inferredType = inferredType,
-                isAlias = symbol.isAlias or false,
-                aliasTarget = symbol.aliasTarget,
-                aliasTargetName = symbol.aliasTargetName,
-                category = 'variable',
-                sourceLocation = {
-                    file = filePath,
-                    line = 1, -- 变量的具体位置需要从AST中获取
-                    column = 1
-                }
-            })
+            -- 添加关联的符号
+            if symbol.related then
+                for relatedId, _ in pairs(symbol.related) do
+                    table.insert(entity.metadata.relatedSymbols, relatedId)
+                end
+            end
             
+            -- 添加别名信息
+            if symbol.isAlias then
+                entity.metadata.isAlias = true
+                entity.metadata.aliasTarget = symbol.aliasTarget
+                entity.metadata.aliasTargetName = symbol.aliasTargetName
+            end
+            
+            ctx.entities[id] = entity
             variableCount = variableCount + 1
-            context.debug(ctx, "导出变量实体: %s (ID: %s)", symbol.name, entityId)
-            
-            ::continue::
         end
     end
     
-    context.debug(ctx, "导出了 %d 个变量实体", variableCount)
+    context.debug(ctx, "导出变量实体: %d", variableCount)
     return variableCount
 end
 
@@ -500,9 +492,7 @@ function phase3.analyze(ctx)
     local moduleCount = exportModuleEntities(ctx)
     local classCount = exportClassEntities(ctx)
     local functionCount = exportFunctionEntities(ctx)
-    -- 不再导出变量实体，只保留模块、类、函数
-    local variableCount = 0
-    context.debug(ctx, "跳过变量实体导出，只保留模块、类、函数")
+    local variableCount = exportVariableEntities(ctx)
     
     print("  导出关系...")
     

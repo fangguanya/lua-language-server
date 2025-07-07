@@ -251,19 +251,24 @@ function context.addRelation(ctx, relationType, fromId, toId, metadata)
 end
 
 -- 添加符号
-function context.addModule(ctx, name, filename, uri, ast)
+function context.addModule(ctx, name, filename, uri, state)
     name = utils.getFormularModulePath(name)
     local module = ctx.modules[name]
     if module ~= nil then
-        module.ast = ast
-        ctx.asts[ast] = module
         if uri then
             ctx.uriToModule[uri] = module
+        end
+        -- 缓存state，避免重复调用files.getState
+        if state and not module.state then
+            module.state = state
+            module.ast = state.ast
+            ctx.asts[state.ast] = module
         end
         return module 
     end
     
     local id = context.generateId(ctx, 'module')
+    local ast = state and state.ast or nil
     module = symbol.module.new(id, name, ast)
     context.addSymbol(ctx, module)
     ctx.modules[name] = module
@@ -272,6 +277,10 @@ function context.addModule(ctx, name, filename, uri, ast)
     end
     if uri then
         ctx.uriToModule[uri] = module
+    end
+    -- 直接使用传入的state，避免调用files.getState
+    if state then
+        module.state = state
     end
     ctx.filename = filename
     ctx.uri = uri
@@ -322,7 +331,7 @@ function context.addReference(ctx, name, ast, parent)
     -- 先找到目标模块的symbol符号信息
     local targetModule = ctx.modules[name]
     if targetModule == nil then
-        targetModule = context.addModule(ctx, name, nil)
+        targetModule = context.addModule(ctx, name, nil, nil, nil)
     end
     
     local id = context.generateId(ctx, 'require')

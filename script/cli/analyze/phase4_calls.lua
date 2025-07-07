@@ -137,7 +137,8 @@ local function getAllPossibleTypeNames(ctx, symbolId, options)
     
     -- 如果是类，直接返回类名
     if symbol.type == SYMBOL_TYPE.CLASS then
-        table.insert(possibleTypes, symbol.aliasTargetName or symbol.name)
+        local className = symbol.aliasTargetName or symbol.name
+        table.insert(possibleTypes, className)
     end
     
     -- 如果是变量，查找其所有可能类型
@@ -174,7 +175,8 @@ local function getAllPossibleTypeNames(ctx, symbolId, options)
     
     -- 如果没有找到任何类型，返回符号名称
     if #possibleTypes == 0 then
-        table.insert(possibleTypes, symbol.aliasTargetName or symbol.name)
+        local symbolName = symbol.aliasTargetName or symbol.name
+        table.insert(possibleTypes, symbolName)
     end
     
     return possibleTypes
@@ -515,6 +517,38 @@ local function processFunctionCalls(ctx)
         else
             -- 如果没有直接的目标符号ID，尝试通过名称查找
             calleeEntity = findEntityByNameAndType(ctx, resolvedCallName, 'function')
+            
+            -- 如果仍然找不到，创建一个外部函数实体
+            if not calleeEntity then
+                local entityId = context.addEntity(ctx, 'function', {
+                    name = resolvedCallName or callInfo.callName,
+                    symbolId = nil,
+                    parentId = nil,
+                    parentName = nil,
+                    category = 'external_function',
+                    callType = callType,
+                    isExternal = true,
+                    sourceLocation = {
+                        file = nil,
+                        line = 1,
+                        column = 1
+                    }
+                })
+                
+                -- 重新查找创建的实体
+                calleeEntity = findEntityBySymbolId(ctx, entityId)
+                if not calleeEntity then
+                    -- 直接从entities中查找
+                    for _, entity in ipairs(ctx.entities) do
+                        if entity.id == entityId then
+                            calleeEntity = entity
+                            break
+                        end
+                    end
+                end
+                
+                context.debug(ctx, "创建外部函数实体: %s (ID: %s)", resolvedCallName or callInfo.callName, entityId)
+            end
         end
         
         -- 为每个可能的类型组合创建调用关系
@@ -543,31 +577,6 @@ local function processFunctionCalls(ctx)
                     context.debug(ctx, "函数调用关系: %s -> %s", callerTypeName, calleeTypeName)
                 end
             end
-        elseif callerEntity and (callType == 'external_call' or callType == 'class_method') then
-            -- 处理外部调用和类方法调用
-            local relationshipType = callType == 'class_method' and 'class_method_call' or 'external_call'
-            for _, callerTypeName in ipairs(callerPossibleTypeNames) do
-                context.addRelation(ctx, 'calls', callerEntity.id, 'external', {
-                    relationship = relationshipType,
-                    fromName = callerTypeName,
-                    toName = resolvedCallName or callInfo.callName,
-                    callName = resolvedCallName or callInfo.callName,
-                    callType = callType,
-                    parameterCount = #(callInfo.parameters or {}),
-                    parameterTypes = callInfo.parameters or {},
-                    sourceLocation = {
-                        uri = callInfo.location.uri,
-                        module = callInfo.location.module,
-                        file = callInfo.location.uri and furi.decode(callInfo.location.uri) or nil,
-                        line = callInfo.location.line,
-                        column = callInfo.location.column
-                    }
-                })
-                
-                functionCallCount = functionCallCount + 1
-                local callTypeDesc = callType == 'class_method' and "类方法调用" or "外部函数调用"
-                context.debug(ctx, "%s: %s -> %s", callTypeDesc, callerTypeName, resolvedCallName or callInfo.callName)
-            end
         else
             context.debug(ctx, "未找到调用关系实体: %s -> %s (源ID: %s, 目标ID: %s, 调用类型: %s)", 
                 callInfo.callName, resolvedCallName or "nil", 
@@ -581,20 +590,30 @@ local function processFunctionCalls(ctx)
     return functionCallCount
 end
 
--- 处理类型实例化关系
-local function processTypeInstantiations(ctx)
-    local instantiationCount = 0
+-- 处理类型引用关系（原类型实例化关系）
+local function processTypeReferences(ctx)
+    local referenceCount = 0
+    
+    context.debug(ctx, "处理类型引用关系，共 %d 个调用记录", #ctx.calls.callInfos)
     
     for _, callInfo in ipairs(ctx.calls.callInfos) do
         local callName = callInfo.callName
         
-        -- 检查是否为构造函数调用
+        context.debug(ctx, "检查调用: %s", callName)
+        
+        -- 检查是否为构造函数调用 (xxx.new 或 xxx:new)
         if callName:find(':new') or callName:find('%.new') then
             local className = nil
+            local constructorType = nil
+            
             if callName:find(':new') then
                 className = callName:match('([^:]+):new')
+                constructorType = 'method_constructor'
+                context.debug(ctx, "发现方法构造函数调用: %s -> %s", callName, className)
             elseif callName:find('%.new') then
                 className = callName:match('([^.]+)%.new')
+                constructorType = 'static_constructor'
+                context.debug(ctx, "发现静态构造函数调用: %s -> %s", callName, className)
             end
             
             if className then
@@ -604,6 +623,7 @@ local function processTypeInstantiations(ctx)
                     for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
                         if aliasInfo.type == "class_alias" and aliasName == className then
                             resolvedClassName = aliasInfo.targetName
+                            context.debug(ctx, "解析类别名: %s -> %s", className, resolvedClassName)
                             break
                         end
                     end
@@ -611,17 +631,25 @@ local function processTypeInstantiations(ctx)
                 
                 -- 查找类实体
                 local classEntity = findEntityByNameAndType(ctx, resolvedClassName, 'class')
+                if not classEntity then
+                    -- 尝试查找原始类名
+                    classEntity = findEntityByNameAndType(ctx, className, 'class')
+                    context.debug(ctx, "尝试查找原始类名: %s", className)
+                end
                 
                 -- 查找调用者实体
                 local callerEntity = nil
                 if callInfo.sourceSymbolId then
                     callerEntity = findEntityBySymbolId(ctx, callInfo.sourceSymbolId)
+                    context.debug(ctx, "查找调用者实体: %s -> %s", callInfo.sourceSymbolId, callerEntity and callerEntity.name or "nil")
                 end
                 
                 if classEntity and callerEntity then
-                    -- 创建类型实例化关系
-                    context.addRelation(ctx, 'instantiates', callerEntity.id, classEntity.id, {
-                        relationship = 'type_instantiation',
+                    -- 创建类型引用关系（而不是实例化关系）
+                    context.addRelation(ctx, 'references', callerEntity.id, classEntity.id, {
+                        relationship = 'type_reference',
+                        referenceType = 'constructor_call',
+                        constructorType = constructorType,
                         originalClassName = className,
                         resolvedClassName = resolvedClassName,
                         sourceLocation = {
@@ -631,15 +659,19 @@ local function processTypeInstantiations(ctx)
                         }
                     })
                     
-                    instantiationCount = instantiationCount + 1
-                    context.debug(ctx, "类型实例化关系: %s -> %s", callerEntity.name, classEntity.name)
+                    referenceCount = referenceCount + 1
+                    context.debug(ctx, "类型引用关系: %s -> %s (构造函数调用: %s)", callerEntity.name, classEntity.name, constructorType)
+                else
+                    context.debug(ctx, "未能创建类型引用关系 - 类实体: %s, 调用者实体: %s", 
+                        classEntity and classEntity.name or "nil", 
+                        callerEntity and callerEntity.name or "nil")
                 end
             end
         end
     end
     
-    context.debug(ctx, "处理了 %d 个类型实例化关系", instantiationCount)
-    return instantiationCount
+    context.debug(ctx, "处理了 %d 个类型引用关系", referenceCount)
+    return referenceCount
 end
 
 -- 处理模块依赖关系
@@ -734,9 +766,19 @@ function phase4.analyze(ctx)
     
     print("  分析调用关系...")
     
+    -- 调试：输出所有调用信息
+    context.debug(ctx, "=== 调试：所有调用信息 ===")
+    for i, callInfo in ipairs(ctx.calls.callInfos) do
+        context.debug(ctx, "调用 %d: %s (源: %s, 目标: %s)", 
+            i, callInfo.callName or "nil", 
+            callInfo.sourceSymbolId or "nil", 
+            callInfo.targetSymbolId or "nil")
+    end
+    context.debug(ctx, "=== 调试结束 ===")
+    
     -- 处理各类关系
     local functionCallCount = processFunctionCalls(ctx)
-    local instantiationCount = processTypeInstantiations(ctx)
+    local referenceCount = processTypeReferences(ctx)
     local dependencyCount = processModuleDependencies(ctx)
     local assignmentCount = processVariableAssignments(ctx)
     
@@ -744,9 +786,9 @@ function phase4.analyze(ctx)
     local totalRelations = #ctx.relations
     
     print(string.format("  ✅ 函数调用关系分析完成:"))
-    print(string.format("    新增关系: %d", functionCallCount + instantiationCount + dependencyCount + assignmentCount))
-    print(string.format("    函数调用: %d, 类型实例化: %d, 模块依赖: %d, 变量赋值: %d", 
-        functionCallCount, instantiationCount, dependencyCount, assignmentCount))
+    print(string.format("    新增关系: %d", functionCallCount + referenceCount + dependencyCount + assignmentCount))
+    print(string.format("    函数调用: %d, 类型引用: %d, 模块依赖: %d, 变量赋值: %d", 
+        functionCallCount, referenceCount, dependencyCount, assignmentCount))
     print(string.format("    总关系数: %d", totalRelations))
     
     -- 打印节点跟踪统计

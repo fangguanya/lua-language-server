@@ -39,6 +39,7 @@ local function analyzeFileSymbols(ctx, uri)
         return
     end
     
+    -- 获取state用于传递给addModule
     local state = files.getState(uri)
     if not state or not state.ast then
         context.debug(ctx, "无法获取AST: %s", uri)
@@ -47,10 +48,10 @@ local function analyzeFileSymbols(ctx, uri)
     
     local ast = state.ast
     
-    context.info("  📄 分析文件: %s (%s)", fileName, modulePath)
+    -- 创建模块符号（直接传入state，避免重复调用files.getState）
+    local module = context.addModule(ctx, modulePath, fileName, uri, state)
     
-    -- 创建模块符号
-    local module = context.addModule(ctx, modulePath, fileName, uri, ast)
+    context.info("  📄 分析文件: %s (%s)", fileName, modulePath)
     
     -- 分析模块级别的符号定义
     guide.eachSource(ast, function(source)
@@ -548,20 +549,25 @@ end
 
 -- 提取函数体代码
 local function extractFunctionBody(ctx, uri, funcSource)
+    -- 检查函数源的位置信息
     if not funcSource.start or not funcSource.finish then
         return nil
     end
     
-    -- 获取文件内容和AST状态
+    -- 获取文件内容
     local text = files.getText(uri)
     if not text then
         return nil
     end
     
-    local state = files.getState(uri)
-    if not state then
+    -- 使用context中缓存的state，避免重复调用files.getState
+    local module = ctx.uriToModule[uri]
+    if not module or not module.state then
+        context.debug(ctx, "无法从缓存获取state: %s", uri)
         return nil
     end
+    
+    local state = module.state
     
     -- 使用guide.positionToOffset将编码位置转换为实际偏移量
     local startOffset = guide.positionToOffset(state, funcSource.start)
