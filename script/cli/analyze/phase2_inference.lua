@@ -852,7 +852,7 @@ local function performDataFlowAnalysis(ctx)
     end
     
     -- 1. 基于reference和related关系进行类型传播
-    propagateTypesThroughReferences(ctx)
+    --propagateTypesThroughReferences(ctx)
     
     -- 2. 基于call信息进行类型推断
     inferTypesFromCalls(ctx)

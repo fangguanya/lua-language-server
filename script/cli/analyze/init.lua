@@ -31,15 +31,6 @@ function analyzer.analyze(rootUri, options)
     print("\n🔍 第一阶段：符号定义识别")
     analyzer.phase1.analyze(ctx)
     
-    -- 检查是否有测试模式标志
-    if options and options.testMode then
-        print("\n⏸️  测试模式：只运行第一阶段")
-        local endTime = os.clock()
-        ctx.statistics.processingTime = endTime - startTime
-        print(string.format("\n✅ 分析完成，耗时: %.2f秒", ctx.statistics.processingTime))
-        return ctx
-    end
-    
     -- 第二阶段：类型推断和call信息记录
     print("\n🔍 第二阶段：类型推断和call信息记录")
     analyzer.phase2.analyze(ctx)
