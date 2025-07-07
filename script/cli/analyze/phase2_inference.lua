@@ -10,6 +10,9 @@ local guide = require 'parser.guide'
 local context = require 'cli.analyze.context'
 local utils = require 'cli.analyze.utils'
 local nodeTracker = require 'cli.analyze.node_tracker'
+local symbol = require 'cli.analyze.symbol'
+
+local SYMBOL_TYPE = symbol.SYMBOL_TYPE
 
 local phase2 = {}
 
