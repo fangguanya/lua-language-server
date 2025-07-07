@@ -371,11 +371,6 @@ function analyzeLocalStatement(ctx, uri, module, source)
     -- source[1] = 变量名字符串（如"Player"）
     -- source.value = 赋值的值（如DefineClass调用）
     
-    local name = utils.getNodeName(source)
-    if name == "WeaponClass" or name == "TmpResult" then
-        print('xxx')
-    end
-    
     context.debug(ctx, "处理local声明语句: %s", source.type)
     
     -- 获取变量名
@@ -1334,11 +1329,9 @@ local function collectClassSuccessors(ctx, classSymbol, visited)
                     classSymbol.name, refSymbol.name, refSymbol.type)
                 
                 -- 如果后继符号也是CLASS类型，递归查找其后继
-                if refSymbol.type == SYMBOL_TYPE.CLASS then
-                    local nestedSuccessors = collectClassSuccessors(ctx, refSymbol, visited)
-                    for _, nestedSymbol in ipairs(nestedSuccessors) do
-                        table.insert(successors, nestedSymbol)
-                    end
+                local nestedSuccessors = collectClassSuccessors(ctx, refSymbol, visited)
+                for _, nestedSymbol in ipairs(nestedSuccessors) do
+                    table.insert(successors, nestedSymbol)
                 end
             end
         end
