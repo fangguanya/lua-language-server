@@ -88,4 +88,14 @@ function TmpResult:Upgrade()
     print("Upgraded " .. self.name .. "! New damage: " .. self.damage)
 end
 
+-- 模块级别的函数，用于测试
+function moduleFunction()
+    -- 这个函数调用其他函数来测试模块级别的调用关系
+    l_func_b()
+    print("Module function called")
+end
+
+-- 调用模块级别的函数
+moduleFunction()
+
 return WeaponClass 

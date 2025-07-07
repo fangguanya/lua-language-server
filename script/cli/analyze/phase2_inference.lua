@@ -17,6 +17,76 @@ local phase2 = {}
 local tracker1 = nil
 local tracker2 = nil
 
+-- 获取符号的所有可能类型名称（严格基于数据流分析）
+local function getAllPossibleTypeNames(ctx, symbolId)
+    if not symbolId then
+        return {}
+    end
+    
+    local symbol = ctx.symbols[symbolId]
+    if not symbol then
+        return {}
+    end
+    
+    local possibleTypes = {}
+    
+    -- 如果是方法，查找其所属的类或模块
+    if symbol.type == SYMBOL_TYPE.METHOD then
+        -- 查找父符号
+        local parent = symbol.parent
+        while parent do
+            local parentSymbol = ctx.symbols[parent]
+            if parentSymbol then
+                if parentSymbol.type == SYMBOL_TYPE.CLASS then
+                    table.insert(possibleTypes, parentSymbol.aliasTargetName or parentSymbol.name)
+                elseif parentSymbol.type == SYMBOL_TYPE.MODULE then
+                    table.insert(possibleTypes, parentSymbol.aliasTargetName or parentSymbol.name)
+                end
+            end
+            parent = parentSymbol and parentSymbol.parent
+        end
+    end
+    
+    -- 如果是类，直接返回类名
+    if symbol.type == SYMBOL_TYPE.CLASS then
+        table.insert(possibleTypes, symbol.aliasTargetName or symbol.name)
+    end
+    
+    -- 如果是变量，查找其所有可能类型
+    if symbol.type == SYMBOL_TYPE.VARIABLE then
+        -- 检查是否有类型推断信息
+        if symbol.possibles and next(symbol.possibles) then
+            for possibleType, _ in pairs(symbol.possibles) do
+                table.insert(possibleTypes, possibleType)
+            end
+        end
+        
+        -- 检查是否是类的别名
+        if symbol.aliasTargetName then
+            table.insert(possibleTypes, symbol.aliasTargetName)
+        end
+        
+        -- 查找关联的类符号
+        if symbol.related and next(symbol.related) then
+            for relatedId, _ in pairs(symbol.related) do
+                local relatedSymbol = ctx.symbols[relatedId]
+                if relatedSymbol and relatedSymbol.type == SYMBOL_TYPE.CLASS then
+                    table.insert(possibleTypes, relatedSymbol.aliasTargetName or relatedSymbol.name)
+                elseif relatedSymbol and relatedSymbol.type == SYMBOL_TYPE.MODULE then
+                    table.insert(possibleTypes, relatedSymbol.aliasTargetName or relatedSymbol.name)
+                end
+            end
+        end
+    end
+    
+    -- 如果是模块，返回模块名
+    if symbol.type == SYMBOL_TYPE.MODULE then
+        table.insert(possibleTypes, symbol.aliasTargetName or symbol.name)
+    end
+    
+    return possibleTypes
+end
+
 -- 记录call信息
 local function recordCallInfo(ctx, uri, moduleId, source)
     local callName = utils.getCallName(source)
@@ -113,6 +183,75 @@ local function recordCallInfo(ctx, uri, moduleId, source)
         },
         timestamp = os.time()
     }
+    
+    -- 检查并建立模块间引用关系
+    local sourceModule = nil
+    local targetModule = nil
+    
+    -- 获取源符号所属的模块
+    if sourceSymbolId then
+        local sourceSymbol = ctx.symbols[sourceSymbolId]
+        if sourceSymbol and sourceSymbol.module then
+            sourceModule = sourceSymbol.module
+        end
+    end
+    
+    -- 获取目标符号所属的模块
+    if targetSymbolId then
+        local targetSymbol = ctx.symbols[targetSymbolId]
+        if targetSymbol and targetSymbol.module then
+            targetModule = targetSymbol.module
+        end
+    end
+    
+    -- 如果源模块和目标模块不同，建立模块间引用关系
+    if sourceModule and targetModule and sourceModule ~= targetModule then
+        context.addRelation(ctx, 'module_reference', sourceModule, targetModule)
+        context.debug(ctx, "🔗 模块间引用: %s -> %s (通过调用 %s)", sourceModule, targetModule, callName)
+    end
+    
+    -- 添加类型级别的调用信息（处理所有可能的类型组合）
+    local sourcePossibleTypes = getAllPossibleTypeNames(ctx, sourceSymbolId)
+    local targetPossibleTypes = getAllPossibleTypeNames(ctx, targetSymbolId)
+    
+    callInfo.typeCallInfos = {}
+    
+    -- 为每个可能的类型组合创建调用关系
+    if #sourcePossibleTypes > 0 and #targetPossibleTypes > 0 then
+        for _, sourceType in ipairs(sourcePossibleTypes) do
+            for _, targetType in ipairs(targetPossibleTypes) do
+                local typeCallInfo = {
+                    sourceType = sourceType,
+                    targetType = targetType,
+                    callPattern = sourceType .. " -> " .. targetType .. " (" .. callName .. ")"
+                }
+                table.insert(callInfo.typeCallInfos, typeCallInfo)
+                context.debug(ctx, "🎯 类型调用关系: %s", typeCallInfo.callPattern)
+            end
+        end
+    elseif #sourcePossibleTypes > 0 then
+        -- 只有源类型，目标未知
+        for _, sourceType in ipairs(sourcePossibleTypes) do
+            local typeCallInfo = {
+                sourceType = sourceType,
+                targetType = "unknown",
+                callPattern = sourceType .. " -> unknown (" .. callName .. ")"
+            }
+            table.insert(callInfo.typeCallInfos, typeCallInfo)
+            context.debug(ctx, "🎯 类型调用关系: %s", typeCallInfo.callPattern)
+        end
+    elseif #targetPossibleTypes > 0 then
+        -- 只有目标类型，源未知
+        for _, targetType in ipairs(targetPossibleTypes) do
+            local typeCallInfo = {
+                sourceType = "unknown",
+                targetType = targetType,
+                callPattern = "unknown -> " .. targetType .. " (" .. callName .. ")"
+            }
+            table.insert(callInfo.typeCallInfos, typeCallInfo)
+            context.debug(ctx, "🎯 类型调用关系: %s", typeCallInfo.callPattern)
+        end
+    end
     
     -- 添加到context中
     context.addCallInfo(ctx, callInfo)
@@ -352,68 +491,16 @@ local function buildTypeRelations(ctx)
     return relationCount
 end
 
--- 建立函数间调用关系
+-- 建立函数间调用关系 (禁用，由第四阶段处理)
 local function buildFunctionCallRelations(ctx)
-    context.debug(ctx, "🔄 开始建立函数间调用关系")
+    context.debug(ctx, "🔄 跳过函数间调用关系建立 (由第四阶段处理)")
     
     local functionRelationCount = 0
     
-    -- 基于call信息建立函数调用关系
-    for _, callInfo in ipairs(ctx.calls.callInfos) do
-        if callInfo.sourceSymbolId and callInfo.targetSymbolId then
-            local sourceSymbol = ctx.symbols[callInfo.sourceSymbolId]
-            local targetSymbol = ctx.symbols[callInfo.targetSymbolId]
-            
-            if sourceSymbol and targetSymbol then
-                -- 创建函数调用关系
-                local relationId = context.addRelation(ctx, 'function_call', 
-                    callInfo.sourceSymbolId, callInfo.targetSymbolId, {
-                    relationship = 'function_invocation',
-                    fromName = sourceSymbol.aliasTargetName or sourceSymbol.name,  -- 使用最终名称
-                    toName = targetSymbol.aliasTargetName or targetSymbol.name,    -- 使用最终名称
-                    callName = callInfo.callName,
-                    parameterCount = #(callInfo.parameters or {}),
-                    parameterTypes = {},
-                    sourceLocation = {
-                        uri = callInfo.location.uri,
-                        module = callInfo.location.module,
-                        line = callInfo.location.line,
-                        column = callInfo.location.column
-                    }
-                })
-                
-                -- 记录参数类型信息
-                local relation = ctx.relations[#ctx.relations]  -- 刚添加的关系
-                if callInfo.parameters then
-                    for i, param in ipairs(callInfo.parameters) do
-                        if param.symbolId then
-                            local paramSymbol = ctx.symbols[param.symbolId]
-                            if paramSymbol then
-                                relation.metadata.parameterTypes[i] = {
-                                    type = param.type,
-                                    inferredType = paramSymbol.inferredType,
-                                    aliasTargetName = paramSymbol.aliasTargetName or paramSymbol.name
-                                }
-                            end
-                        else
-                            relation.metadata.parameterTypes[i] = {
-                                type = param.type,
-                                value = param.value
-                            }
-                        end
-                    end
-                end
-                
-                functionRelationCount = functionRelationCount + 1
-                context.debug(ctx, "    建立函数关系: %s -> %s (调用: %s)", 
-                    sourceSymbol.aliasTargetName or sourceSymbol.name, 
-                    targetSymbol.aliasTargetName or targetSymbol.name, 
-                    callInfo.callName)
-            end
-        end
-    end
+    -- 第二阶段不再创建函数调用关系，交给第四阶段处理
+    -- 这样可以确保使用正确的类型名而不是变量名
     
-    context.debug(ctx, "✅ 函数间调用关系建立完成，共%d个关系", functionRelationCount)
+    context.debug(ctx, "✅ 函数间调用关系建立跳过，共%d个关系", functionRelationCount)
     return functionRelationCount
 end
 
@@ -453,6 +540,64 @@ local function buildReferenceRelations(ctx)
     return referenceRelationCount
 end
 
+-- 建立类型间调用关系汇总
+local function buildTypeCallSummary(ctx)
+    context.debug(ctx, "🔄 开始建立类型间调用关系汇总")
+    
+    local typeCallSummary = {}
+    local callCount = 0
+    
+    -- 遍历所有调用信息，提取类型级别的调用关系
+    for _, callInfo in ipairs(ctx.calls.callInfos) do
+        if callInfo.typeCallInfo then
+            local sourceType = callInfo.typeCallInfo.sourceType
+            local targetType = callInfo.typeCallInfo.targetType
+            local sourceMethod = callInfo.typeCallInfo.sourceMethod
+            local targetMethod = callInfo.typeCallInfo.targetMethod
+            
+            -- 创建类型调用关系的键
+            local relationKey = sourceType .. " -> " .. targetType
+            
+            if not typeCallSummary[relationKey] then
+                typeCallSummary[relationKey] = {
+                    sourceType = sourceType,
+                    targetType = targetType,
+                    calls = {}
+                }
+            end
+            
+            -- 添加具体的方法调用
+            local methodCall = {
+                sourceMethod = sourceMethod,
+                targetMethod = targetMethod,
+                callName = callInfo.callName,
+                location = callInfo.location
+            }
+            
+            table.insert(typeCallSummary[relationKey].calls, methodCall)
+            callCount = callCount + 1
+        end
+    end
+    
+    -- 输出类型调用关系汇总
+    context.debug(ctx, "📊 类型间调用关系汇总:")
+    for relationKey, relation in pairs(typeCallSummary) do
+        context.debug(ctx, "  %s (%d个调用)", relationKey, #relation.calls)
+        for _, call in ipairs(relation.calls) do
+            context.debug(ctx, "    %s.%s -> %s.%s (%s)", 
+                relation.sourceType, call.sourceMethod or "unknown",
+                relation.targetType, call.targetMethod or call.callName,
+                call.callName)
+        end
+    end
+    
+    -- 保存到context中
+    ctx.typeCallSummary = typeCallSummary
+    
+    context.debug(ctx, "✅ 类型间调用关系汇总完成，共%d个调用关系", callCount)
+    return callCount
+end
+
 -- 第2轮操作：数据流分析
 local function performDataFlowAnalysis(ctx)
     -- 重置节点去重状态
@@ -476,10 +621,14 @@ local function performDataFlowAnalysis(ctx)
     local functionRelationCount = buildFunctionCallRelations(ctx)
     local referenceRelationCount = buildReferenceRelations(ctx)
     
+    -- 4. 建立类型间调用关系汇总
+    local typeCallSummaryCount = buildTypeCallSummary(ctx)
+    
     print(string.format("  ✅ 数据流分析完成:"))
     print(string.format("    类型关系: %d", typeRelationCount))
     print(string.format("    函数关系: %d", functionRelationCount))
     print(string.format("    引用关系: %d", referenceRelationCount))
+    print(string.format("    类型调用关系汇总: %d", typeCallSummaryCount))
     print(string.format("    总关系数: %d", ctx.statistics.totalRelations))
 end
 

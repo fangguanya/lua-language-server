@@ -1153,33 +1153,20 @@ function analyzeSourceReferences(ctx, uri, module, source)
     end
     
     -- 调试：检查节点是否有ref字段（注意：是ref不是refs）
-    if source.ref then
-        context.debug(ctx, "节点 %s (类型: %s) 有 %d 个引用", 
-            utils.getNodeName(source) or "unnamed", source.type, #source.ref)
-            
+    if source.ref then            
         -- 获取当前节点对应的符号
         local currentSymbol = ctx.asts[source]
         if currentSymbol then
-            context.debug(ctx, "找到对应符号: %s (ID: %s)", currentSymbol.name, currentSymbol.id)
             -- 处理每个引用
             for _, ref in ipairs(source.ref) do
                 analyzeReference(ctx, uri, module, currentSymbol, ref)
             end
         else
-            -- 如果没有找到符号，这可能是正常的（很多AST节点没有对应的符号）
-            -- 但是我们仍然需要处理这些引用关系
-            context.debug(ctx, "处理无符号节点的引用: %s (类型: %s)", 
-                utils.getNodeName(source) or "unnamed", source.type)
-            
             -- 对于没有符号的节点，我们需要分析其引用关系
             for _, ref in ipairs(source.ref) do
                 analyzeNodeReference(ctx, uri, module, source, ref)
             end
         end
-    else
-        -- 调试：记录没有ref字段的节点
-        context.debug(ctx, "节点 %s (类型: %s) 没有ref字段", 
-            utils.getNodeName(source) or "unnamed", source.type)
     end
     
     -- 第一阶段只处理符号间的引用关系，不进行类型推断
@@ -1523,7 +1510,7 @@ function phase1.analyze(ctx)
         end
     end
     
-    context.debug(ctx, "第一遍完成，已缓存 %d 个模块对象", utils.tableSize(ctx.uriToModule))
+    context.info("第一遍完成，已缓存 %d 个模块对象", utils.tableSize(ctx.uriToModule))
     
     -- 第二遍：建立引用关系（使用缓存的模块对象）
     context.resetProcessedNodes(ctx, "Phase1-Round2")
@@ -1568,7 +1555,7 @@ function phase1.analyze(ctx)
             for relatedId, _ in pairs(symbol.related) do
                 table.insert(relatedList, relatedId)
             end
-            context.info("      %s -> %s", symbol.name, table.concat(relatedList, ", "))
+            context.debug(ctx, "      %s -> %s", symbol.name, table.concat(relatedList, ", "))
             end
         end
     end

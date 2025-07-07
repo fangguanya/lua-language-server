@@ -134,20 +134,4 @@ function nodeTracker.mergeStatistics(trackers)
     return merged
 end
 
--- 打印合并统计信息
-function nodeTracker.printMergedStatistics(merged)
-    print(string.format("\n📊 节点处理统计:"))
-    print(string.format("  总节点数: %d", merged.totalNodes))
-    print(string.format("  重复处理节点数: %d", merged.duplicateNodes))
-    print(string.format("  select节点总数: %d", merged.selectTotal))
-    print(string.format("  select节点重复处理数: %d", merged.selectDuplicate))
-    
-    print(string.format("\n📈 各阶段统计:"))
-    for _, phase in ipairs(merged.phaseDetails) do
-        print(string.format("  %s:", phase.phaseName))
-        print(string.format("    节点数: %d, 重复: %d, select: %d, select重复: %d",
-            phase.totalNodes, phase.duplicateNodes, phase.selectTotal, phase.selectDuplicate))
-    end
-end
-
 return nodeTracker 

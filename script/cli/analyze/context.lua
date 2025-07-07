@@ -589,29 +589,71 @@ end
 
 -- 查找函数符号
 function context.findFunctionSymbol(ctx, name)
+    -- 首先查找METHOD类型的符号
     for id, symbol in pairs(ctx.symbols) do
         if symbol.type == SYMBOL_TYPE.METHOD and symbol.name == name then
             return id, symbol
         end
     end
-    return nil, nil
-end
-
--- 查找变量符号
-function context.findVariableSymbol(ctx, name, scope)
-    -- 首先在指定作用域查找
-    if scope then
-        for _, varId in ipairs(scope.variables or {}) do
-            local var = ctx.symbols[varId]
-            if var and var.name == name then
-                return varId, var
+    
+    -- 解析类名和方法名 (支持 obj.method 和 obj:method 格式)
+    local className, methodName = name:match('([^.:]+)[.:](.+)')
+    if className and methodName then
+        -- 查找类符号
+        for id, symbol in pairs(ctx.symbols) do
+            if symbol.type == SYMBOL_TYPE.CLASS and symbol.name == className then
+                -- 查找类的方法
+                if symbol.methods then
+                    for _, methodId in ipairs(symbol.methods) do
+                        local method = ctx.symbols[methodId]
+                        if method and method.name == methodName then
+                            return methodId, method
+                        end
+                    end
+                end
+                -- 如果没有找到具体方法，返回类本身（用于构造函数等）
+                return id, symbol
+            end
+        end
+        
+        -- 如果没有找到类，尝试查找变量（可能是模块引用）
+        for id, symbol in pairs(ctx.symbols) do
+            if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == className then
+                -- 检查是否是别名或模块引用
+                if symbol.aliasTarget or symbol.related then
+                    return id, symbol
+                end
             end
         end
     end
     
-    -- 在全局范围查找
+    -- 查找全局函数（如require）
     for id, symbol in pairs(ctx.symbols) do
-        if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == name then
+        if symbol.name == name and (symbol.type == SYMBOL_TYPE.METHOD or symbol.type == SYMBOL_TYPE.VARIABLE) then
+            return id, symbol
+        end
+    end
+    
+    return nil, nil
+end
+
+-- 查找变量符号
+function context.findVariableSymbol(ctx, variableName, currentScope)
+    -- 在当前作用域查找
+    if currentScope then
+        for id, symbol in pairs(ctx.symbols) do
+            if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == variableName then
+                -- 检查是否在当前作用域内
+                if symbol.scope == currentScope.id then
+                    return id, symbol
+                end
+            end
+        end
+    end
+    
+    -- 在全局作用域查找
+    for id, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == variableName then
             return id, symbol
         end
     end
@@ -693,10 +735,6 @@ function context.markNodeAsProcessed(ctx, node)
     -- 使用节点的内存地址作为唯一标识
     local nodeId = tostring(node)
     ctx.processedNodes[nodeId] = ctx.currentFrameIndex
-    
-    -- 调试信息
-    context.debug(ctx, "🔒 节点已标记为已处理: %s (类型: %s, 帧: %d)", 
-        nodeId, node.type or "unknown", ctx.currentFrameIndex)
 end
 
 -- 检查并标记节点（组合操作，支持调用帧可重入）
@@ -712,18 +750,6 @@ function context.checkAndMarkNode(ctx, node)
         context.debug(ctx, "⏭️  跳过已处理的节点: %s (类型: %s, 当前帧: %d, 处理帧: %d)", 
             nodeId, node.type or "unknown", ctx.currentFrameIndex, previousFrameIndex)
         return false
-    end
-    -- 检查是否是同一帧内的重复处理或跨帧处理
-    local nodeId = tostring(node)
-    local previousFrameIndex = ctx.processedNodes[nodeId]
-    if previousFrameIndex then
-        if previousFrameIndex == ctx.currentFrameIndex then
-            context.debug(ctx, "🔄 同一帧内重复处理节点: %s (类型: %s, 帧: %d)", 
-                nodeId, node.type or "unknown", ctx.currentFrameIndex)
-        else
-            context.debug(ctx, "🔄 跨帧重新处理节点: %s (类型: %s, 从帧%d到帧%d)", 
-                nodeId, node.type or "unknown", previousFrameIndex, ctx.currentFrameIndex)
-        end
     end
     
     -- 标记节点为已处理
@@ -767,6 +793,29 @@ function context.resetProcessedNodes(ctx, phaseName)
     ctx.currentFrameIndex = 0
     
     context.debug(ctx, "🔄 重置调用帧状态 [%s]: 调用帧索引重置为0", phaseName or "Unknown")
+end
+
+-- 按路径查找模块符号
+function context.findModuleByPath(ctx, modulePath)
+    -- 标准化模块路径
+    local normalizedPath = modulePath:gsub("[/\\]", ".")
+    
+    -- 查找模块符号
+    for id, symbol in pairs(ctx.symbols) do
+        if symbol.type == SYMBOL_TYPE.MODULE then
+            -- 检查模块名是否匹配
+            if symbol.name == normalizedPath or symbol.name == modulePath then
+                return id, symbol
+            end
+            
+            -- 检查模块名的尾部是否匹配（支持相对路径）
+            if symbol.name:match(normalizedPath .. "$") or normalizedPath:match(symbol.name .. "$") then
+                return id, symbol
+            end
+        end
+    end
+    
+    return nil, nil
 end
 
 return context 
