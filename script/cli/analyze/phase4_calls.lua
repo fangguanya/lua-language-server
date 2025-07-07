@@ -261,6 +261,9 @@ end
 function phase4.analyze(ctx)
     print("🔍 第四阶段：函数调用关系分析")
     
+    -- 重置节点去重状态
+    context.resetProcessedNodes(ctx, "Phase4")
+    
     -- 初始化节点跟踪器
     if ctx.config.enableNodeTracking then
         tracker4 = nodeTracker.new("phase4_calls")

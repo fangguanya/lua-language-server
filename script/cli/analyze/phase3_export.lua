@@ -545,6 +545,9 @@ end
 function phase3.analyze(ctx)
     print("🔍 第三阶段：实体关系导出")
     
+    -- 重置节点去重状态
+    context.resetProcessedNodes(ctx, "Phase3")
+    
     -- 初始化节点跟踪器
     if ctx.config.enableNodeTracking then
         tracker3 = nodeTracker.new("phase3_export")

@@ -94,7 +94,13 @@ function context.new(rootUri, options)
             debugMode = options and options.debug or false,
             -- 节点处理跟踪（用于调试重复处理问题）
             enableNodeTracking = options and options.enableNodeTracking or false
-        }
+        },
+        
+        -- 节点去重机制（用于解决AST节点重复处理问题）
+        processedNodes = {},  -- 存储已处理的节点ID，格式：{nodeId -> frameIndex}
+        
+        -- 调用帧管理（支持可重入）
+        currentFrameIndex = 0,  -- 当前调用帧索引
     }
     -- 不再使用applyMethods，避免函数引用导致JSON序列化问题
     return ctx
@@ -174,6 +180,9 @@ function context.debug(ctx, message, ...)
     if ctx.config.debugMode then
         print(string.format("🐛 " .. message, ...))
     end
+end
+function context.info(message, ...)
+    print(string.format("[INFO]" .. message, ...))
 end
 
 -- 检查目录是否应该被过滤
@@ -653,6 +662,116 @@ function context.findSymbolByName(ctx, name, scope)
     end
     
     return nil, nil
+end
+
+-- 检查节点是否已经被处理过（考虑调用帧）
+function context.isNodeProcessed(ctx, node)
+    if not node then
+        return false
+    end
+    
+    -- 使用节点的内存地址作为唯一标识
+    local nodeId = tostring(node)
+    local processedFrameIndex = ctx.processedNodes[nodeId]
+    
+    -- 如果节点未处理过，返回false（允许处理）
+    if not processedFrameIndex then
+        return false
+    end
+    
+    -- 如果节点在当前调用帧已经处理过，返回false（同一帧可以重复进入）
+    -- 如果节点在不同调用帧处理过，返回true（不同帧之间避免重复）
+    return processedFrameIndex ~= ctx.currentFrameIndex
+end
+
+-- 标记节点为已处理（记录当前调用帧）
+function context.markNodeAsProcessed(ctx, node)
+    if not node then
+        return
+    end
+    
+    -- 使用节点的内存地址作为唯一标识
+    local nodeId = tostring(node)
+    ctx.processedNodes[nodeId] = ctx.currentFrameIndex
+    
+    -- 调试信息
+    context.debug(ctx, "🔒 节点已标记为已处理: %s (类型: %s, 帧: %d)", 
+        nodeId, node.type or "unknown", ctx.currentFrameIndex)
+end
+
+-- 检查并标记节点（组合操作，支持调用帧可重入）
+function context.checkAndMarkNode(ctx, node)
+    if not node then
+        return false
+    end
+    
+    if context.isNodeProcessed(ctx, node) then
+        -- 节点在不同调用帧已经被处理过，跳过
+        local nodeId = tostring(node)
+        local previousFrameIndex = ctx.processedNodes[nodeId]
+        context.debug(ctx, "⏭️  跳过已处理的节点: %s (类型: %s, 当前帧: %d, 处理帧: %d)", 
+            nodeId, node.type or "unknown", ctx.currentFrameIndex, previousFrameIndex)
+        return false
+    end
+    local utils = require 'cli.analyze.utils'
+    local name = utils.getNodeName(node)
+    if name == "WeaponClass" then
+        print("xxx")
+    end
+    -- 检查是否是同一帧内的重复处理或跨帧处理
+    local nodeId = tostring(node)
+    local previousFrameIndex = ctx.processedNodes[nodeId]
+    if previousFrameIndex then
+        if previousFrameIndex == ctx.currentFrameIndex then
+            context.debug(ctx, "🔄 同一帧内重复处理节点: %s (类型: %s, 帧: %d)", 
+                nodeId, node.type or "unknown", ctx.currentFrameIndex)
+        else
+            context.debug(ctx, "🔄 跨帧重新处理节点: %s (类型: %s, 从帧%d到帧%d)", 
+                nodeId, node.type or "unknown", previousFrameIndex, ctx.currentFrameIndex)
+        end
+    end
+    
+    -- 标记节点为已处理
+    context.markNodeAsProcessed(ctx, node)
+    return true
+end
+
+-- 获取节点去重统计信息
+function context.getDeduplicationStats(ctx)
+    local totalProcessed = 0
+    for _ in pairs(ctx.processedNodes) do
+        totalProcessed = totalProcessed + 1
+    end
+    
+    return {
+        totalProcessedNodes = totalProcessed,
+        processedNodes = ctx.processedNodes
+    }
+end
+
+-- 重置已处理节点集合（在每个阶段/循环开始时调用）
+function context.resetProcessedNodes(ctx, phaseName)
+    if not ctx.processedNodes then
+        ctx.processedNodes = {}
+        return
+    end
+    
+    local count = 0
+    for _ in pairs(ctx.processedNodes) do
+        count = count + 1
+    end
+    
+    if count > 0 then
+        context.debug(ctx, "🔄 重置节点去重状态 [%s]: 清除 %d 个已处理节点", phaseName or "Unknown", count)
+    end
+    
+    -- 重置节点处理记录
+    ctx.processedNodes = {}
+    
+    -- 重置调用帧状态
+    ctx.currentFrameIndex = 0
+    
+    context.debug(ctx, "🔄 重置调用帧状态 [%s]: 调用帧索引重置为0", phaseName or "Unknown")
 end
 
 return context 

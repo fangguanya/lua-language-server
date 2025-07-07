@@ -25,7 +25,6 @@ function nodeTracker.recordNode(tracker, node)
     if not node then
         return
     end
-    
     -- 使用节点的内存地址作为唯一标识
     local nodeId = tostring(node)
     

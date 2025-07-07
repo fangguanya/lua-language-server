@@ -47,13 +47,15 @@ local function analyzeFileSymbols(ctx, uri)
     
     local ast = state.ast
     
-    print(string.format("  📄 分析文件: %s (%s)", fileName, modulePath))
+    context.info("  📄 分析文件: %s (%s)", fileName, modulePath)
     
     -- 创建模块符号
     local module = context.addModule(ctx, modulePath, fileName, uri, ast)
     
     -- 分析模块级别的符号定义
     guide.eachSource(ast, function(source)
+        -- 每次处理新的源节点时，增加调用帧索引
+        ctx.currentFrameIndex = ctx.currentFrameIndex + 1
         analyzeSymbolDefinition(ctx, uri, module, source)
     end)
     
@@ -62,6 +64,11 @@ end
 
 -- 分析符号定义的主调度函数
 function analyzeSymbolDefinition(ctx, uri, module, source)
+    -- 节点去重检查：如果节点已经被处理过，直接返回
+    if not context.checkAndMarkNode(ctx, source) then
+        return
+    end
+    
     local sourceType = source.type
     
     -- 根据AST节点类型分发处理
@@ -347,6 +354,11 @@ end
 
 -- 分析local语句声明 (local: local var = value，局部变量声明)
 function analyzeLocalStatement(ctx, uri, module, source)
+    -- 节点去重检查：如果节点已经被处理过，直接返回
+    if not context.checkAndMarkNode(ctx, source) then
+        return
+    end
+    
     -- 跟踪节点处理（如果启用）
     if trackerSymbols then
         nodeTracker.recordNode(trackerSymbols, source)
@@ -377,8 +389,13 @@ function analyzeLocalStatement(ctx, uri, module, source)
         context.debug(ctx, "local变量 %s 有赋值，类型: %s", varName, value.type)
         
         -- 检查是否是require语句
-        if value.type == 'call' then
-            local callResult = analyzeCallExpression(ctx, uri, module, value)
+        if value and (value.type == 'call' or value.type == 'select') then
+            local result = nil
+            if value.type == 'call' then
+                callResult = analyzeCallExpression(ctx, uri, module, value)
+            elseif value.type == 'select' then
+                callResult = analyzeSelectExpression(ctx, uri, module, value)
+            end
             if callResult and callResult.isRequire then
                 -- 这是一个require调用，创建引用
                 local ref = context.addReference(ctx, callResult.moduleName, source, module)
@@ -423,6 +440,11 @@ end
 
 -- 分析函数定义
 function analyzeFunctionDefinition(ctx, uri, module, source)
+    -- 节点去重检查：如果节点已经被处理过，直接返回
+    if not context.checkAndMarkNode(ctx, source) then
+        return
+    end
+    
     -- 跟踪节点处理（如果启用）
     if trackerSymbols then
         nodeTracker.recordNode(trackerSymbols, source)
@@ -782,6 +804,11 @@ end
 
 -- 分析函数调用表达式
 function analyzeCallExpression(ctx, uri, module, source)
+    -- 节点去重检查：如果节点已经被处理过，直接返回
+    if not context.checkAndMarkNode(ctx, source) then
+        return nil
+    end
+    
     -- 跟踪节点处理（如果启用）
     if trackerSymbols then
         nodeTracker.recordNode(trackerSymbols, source)
@@ -848,6 +875,11 @@ end
 
 -- 分析select表达式（处理DefineClass和kg_require等函数调用）
 function analyzeSelectExpression(ctx, uri, module, source)
+    -- 节点去重检查：如果节点已经被处理过，直接返回
+    if not context.checkAndMarkNode(ctx, source) then
+        return nil
+    end
+    
     -- 跟踪节点处理（如果启用）
     if trackerSymbols then
         nodeTracker.recordNode(trackerSymbols, source)
@@ -866,6 +898,7 @@ function analyzeSelectExpression(ctx, uri, module, source)
     
     if callNode then
         -- 使用现有的analyzeCallExpression函数处理调用
+        -- 注意：这里不需要再次检查callNode的去重，因为analyzeCallExpression内部会处理
         local result = analyzeCallExpression(ctx, uri, module, callNode)
         
         context.debug(ctx, "select表达式中的调用: %s", 
@@ -880,6 +913,11 @@ end
 
 -- 分析return语句
 function analyzeReturnStatement(ctx, uri, module, source)
+    -- 节点去重检查：如果节点已经被处理过，直接返回
+    if not context.checkAndMarkNode(ctx, source) then
+        return
+    end
+    
     -- 跟踪节点处理（如果启用）
     if trackerSymbols then
         nodeTracker.recordNode(trackerSymbols, source)
@@ -965,6 +1003,8 @@ local function analyzeFileReferences(ctx, uri)
     
     -- 使用guide.eachSource遍历当前节点及其所有子节点
     guide.eachSource(ast, function(source)
+        -- 每次处理新的源节点时，增加调用帧索引
+        ctx.currentFrameIndex = ctx.currentFrameIndex + 1
         analyzeSourceReferences(ctx, uri, module, source)
     end)
 end
@@ -1011,6 +1051,11 @@ end
 
 -- 分析单个源节点的引用关系
 function analyzeSourceReferences(ctx, uri, module, source)
+    -- 节点去重检查：如果节点已经被处理过，直接返回
+    if not context.checkAndMarkNode(ctx, source) then
+        return
+    end
+    
     -- 跟踪节点处理（如果启用）
     if trackerSymbols then
         nodeTracker.recordNode(trackerSymbols, source)
@@ -1364,6 +1409,9 @@ end
 
 -- 主分析函数 - 三遍处理
 function phase1.analyze(ctx)
+    -- 重置节点去重状态
+    context.resetProcessedNodes(ctx, "Phase1")
+    
     -- 初始化节点处理跟踪器（可通过配置控制）
     if ctx.config and ctx.config.enableNodeTracking then
         trackerSymbols = nodeTracker.new("phase1_symbols")
@@ -1373,23 +1421,24 @@ function phase1.analyze(ctx)
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
     
-    print(string.format("  发现 %d 个Lua文件", totalFiles))
+    context.info("  发现 %d 个Lua文件", totalFiles)
     
     -- 第一遍：建立基本符号定义（同时缓存AST和模块对象）
-    print("  🔍 第一遍：建立符号定义...")
+    context.info("  🔍 第一遍：建立符号定义...")
     for i, uri in ipairs(uris) do
         analyzeFileSymbols(ctx, uri)
         
         -- 显示进度
         if i % 10 == 0 or i == totalFiles then
-            print(string.format("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
+            context.info("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100)
         end
     end
     
     context.debug(ctx, "第一遍完成，已缓存 %d 个模块对象", utils.tableSize(ctx.uriToModule))
     
     -- 第二遍：建立引用关系（使用缓存的模块对象）
-    print("  🔗 第二遍：建立引用关系...")
+    context.resetProcessedNodes(ctx, "Phase1-Round2")
+    context.info("  🔗 第二遍：建立引用关系...")
     context.debug(ctx, "使用缓存的文件列表，共 %d 个文件", #ctx.fileList)
     
     -- 直接使用缓存的文件列表，不需要重新获取
@@ -1398,7 +1447,7 @@ function phase1.analyze(ctx)
         
         -- 显示进度
         if i % 10 == 0 or i == totalFiles then
-            print(string.format("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100))
+            context.info("    进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100)
         end
     end
     
@@ -1418,31 +1467,31 @@ function phase1.analyze(ctx)
         end
     end
     
-    context.debug(ctx, "📊 引用统计：引用关系 %d 个，关联关系 %d 个", 
-        totalRefs, totalRelated)
-    print(string.format("    引用统计：引用关系 %d 个，关联关系 %d 个", 
-        totalRefs, totalRelated))
+    context.debug(ctx, "📊 引用统计：引用关系 %d 个，关联关系 %d 个", totalRefs, totalRelated)
+    context.info("    引用统计：引用关系 %d 个，关联关系 %d 个", totalRefs, totalRelated)
     
     -- 强制输出一些具体的引用信息用于调试
     if totalRelated > 0 then
-        print("    具体的关联关系:")
+        context.info("    具体的关联关系:")
         for id, symbol in pairs(ctx.symbols) do
                     if symbol.related and next(symbol.related) then
             local relatedList = {}
             for relatedId, _ in pairs(symbol.related) do
                 table.insert(relatedList, relatedId)
             end
-            print(string.format("      %s -> %s", symbol.name, table.concat(relatedList, ", ")))
+            context.info("      %s -> %s", symbol.name, table.concat(relatedList, ", "))
             end
         end
     end
     
     -- 第三遍：简化父类关系
-    print("  🔄 第三遍：简化父类关系...")
+    context.resetProcessedNodes(ctx, "Phase1-Round3")
+    context.info("  🔄 第三遍：简化父类关系...")
     resolveParentClassRelations(ctx)
     
     -- 第四遍：整理类型别名，移动定义到真正的类型上
-    print("  🔄 第四遍：整理类型别名...")
+    context.resetProcessedNodes(ctx, "Phase1-Round4")
+    context.info("  🔄 第四遍：整理类型别名...")
     consolidateTypeAliases(ctx)
     
     -- 统计信息
@@ -1450,9 +1499,13 @@ function phase1.analyze(ctx)
     local classCount = utils.tableSize(ctx.classes)
     local symbolCount = utils.tableSize(ctx.symbols)
     
-    print(string.format("  ✅ 符号识别完成:"))
-    print(string.format("     模块: %d, 类: %d, 符号: %d", 
-        moduleCount, classCount, symbolCount))
+    context.info("  ✅ 符号识别完成:")
+    context.info("     模块: %d, 类: %d, 符号: %d", moduleCount, classCount, symbolCount)
+    
+    -- 输出节点去重统计信息
+    local dedupStats = context.getDeduplicationStats(ctx)
+    print(string.format("🔒 节点去重统计: 总处理节点数 %d", dedupStats.totalProcessedNodes))
+    context.debug(ctx, "🔒 节点去重统计: 总处理节点数 %d", dedupStats.totalProcessedNodes)
     
     -- 输出节点处理跟踪统计
     if ctx.config.enableNodeTracking and trackerSymbols then

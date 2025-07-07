@@ -123,6 +123,9 @@ end
 
 -- 第1轮操作：遍历所有AST，记录call信息
 local function recordAllCallInfos(ctx)
+    -- 重置节点去重状态
+    context.resetProcessedNodes(ctx, "Phase2-Round1")
+    
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
     
@@ -142,6 +145,9 @@ local function recordAllCallInfos(ctx)
             
             -- 遍历所有调用节点
             guide.eachSource(module.ast, function(source)
+                -- 每次处理新的源节点时，增加调用帧索引
+                ctx.currentFrameIndex = ctx.currentFrameIndex + 1
+                
                 -- 记录节点处理
                 if tracker1 then
                     nodeTracker.recordNode(tracker1, source)
@@ -451,6 +457,9 @@ end
 
 -- 第2轮操作：数据流分析
 local function performDataFlowAnalysis(ctx)
+    -- 重置节点去重状态
+    context.resetProcessedNodes(ctx, "Phase2-Round2")
+    
     print(string.format("  🔄 第2轮操作：数据流分析"))
     
     -- 初始化节点跟踪器
@@ -489,7 +498,7 @@ function phase2.analyze(ctx)
     -- 打印节点跟踪统计
     if ctx.config.enableNodeTracking then
         if tracker2 then
-            tracker2:printStatistics()
+            nodeTracker.printStatistics(tracker2)
         end
     end
     
