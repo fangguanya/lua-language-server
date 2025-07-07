@@ -188,6 +188,8 @@ local function exportVariableEntities(ctx)
             
             variableCount = variableCount + 1
             context.debug(ctx, "导出变量实体: %s (ID: %s)", symbol.name, entityId)
+            
+            ::continue::
         end
     end
     
@@ -567,7 +569,9 @@ function phase3.analyze(ctx)
     local moduleCount = exportModuleEntities(ctx)
     local classCount = exportClassEntities(ctx)
     local functionCount = exportFunctionEntities(ctx)
-    local variableCount = exportVariableEntities(ctx)
+    -- 不再导出变量实体，只保留模块、类、函数
+    local variableCount = 0
+    context.debug(ctx, "跳过变量实体导出，只保留模块、类、函数")
     
     print("  导出关系...")
     
