@@ -713,11 +713,6 @@ function context.checkAndMarkNode(ctx, node)
             nodeId, node.type or "unknown", ctx.currentFrameIndex, previousFrameIndex)
         return false
     end
-    local utils = require 'cli.analyze.utils'
-    local name = utils.getNodeName(node)
-    if name == "WeaponClass" then
-        print("xxx")
-    end
     -- 检查是否是同一帧内的重复处理或跨帧处理
     local nodeId = tostring(node)
     local previousFrameIndex = ctx.processedNodes[nodeId]

@@ -131,7 +131,7 @@ function analyzeGlobalVariableDefinition(ctx, uri, module, source)
             if class then
                 -- 创建类的别名变量（作为普通容器）
                 local aliasVar = context.addVariable(ctx, varName, source, module)
-                table.insert(aliasVar.possibles, className)
+                aliasVar.possibles[className] = true
                 class.refs[aliasVar.id] = true
                 
                 context.debug(ctx, "全局类别名: %s -> %s", varName, className)
@@ -195,7 +195,7 @@ function analyzeLocalVariableDefinition(ctx, uri, module, source)
                 local class = ctx.classes[className]
                 if class then
                     -- 更新变量的类型
-                    table.insert(existingVar.possibles, className)
+                    existingVar.possibles[className] = true
                     class.refs[existingVar.id] = true
                     
                     context.debug(ctx, "局部变量类别名: %s -> %s", varName, className)
@@ -371,6 +371,11 @@ function analyzeLocalStatement(ctx, uri, module, source)
     -- source[1] = 变量名字符串（如"Player"）
     -- source.value = 赋值的值（如DefineClass调用）
     
+    local name = utils.getNodeName(source)
+    if name == "WeaponClass" or name == "TmpResult" then
+        print('xxx')
+    end
+    
     context.debug(ctx, "处理local声明语句: %s", source.type)
     
     -- 获取变量名
@@ -412,7 +417,7 @@ function analyzeLocalStatement(ctx, uri, module, source)
                 if class then
                     -- 创建类的别名变量
                     local aliasVar = context.addVariable(ctx, varName, source, currentScope)
-                    table.insert(aliasVar.possibles, className)
+                    aliasVar.possibles[className] = true
                     class.refs[aliasVar.id] = true
                     
                     context.debug(ctx, "局部类别名: %s -> %s", varName, className)
@@ -956,23 +961,23 @@ function analyzeValueAssignment(ctx, uri, module, variable, valueSource)
     
     -- 只记录可以立即确定的基础类型
     if valueType == 'string' then
-        table.insert(variable.possibles, 'string')
+        variable.possibles['string'] = true
     elseif valueType == 'number' or valueType == 'integer' then
-        table.insert(variable.possibles, 'number')
+        variable.possibles['number'] = true
     elseif valueType == 'boolean' then
-        table.insert(variable.possibles, 'boolean')
+        variable.possibles['boolean'] = true
     elseif valueType == 'table' then
-        table.insert(variable.possibles, 'table')
+        variable.possibles['table'] = true
     elseif valueType == 'function' then
-        table.insert(variable.possibles, 'function')
+        variable.possibles['function'] = true
     elseif valueType == 'nil' then
-        table.insert(variable.possibles, 'nil')
+        variable.possibles['nil'] = true
     elseif valueType == 'call' then
         -- 函数调用结果 - 只处理可以立即确定类型的情况
         local callResult = analyzeCallExpression(ctx, uri, module, valueSource)
         if callResult and callResult.isClassDefinition then
             -- 类定义调用，可以立即确定类型
-            table.insert(variable.possibles, callResult.className)
+            variable.possibles[callResult.className] = true
             local class = ctx.classes[callResult.className]
             if class then
                 class.refs[variable.id] = true
@@ -984,17 +989,98 @@ function analyzeValueAssignment(ctx, uri, module, variable, valueSource)
         local selectResult = analyzeSelectExpression(ctx, uri, module, valueSource)
         if selectResult and selectResult.isClassDefinition then
             -- 类定义调用，可以立即确定类型
-            table.insert(variable.possibles, selectResult.className)
-            local class = ctx.classes[callResult.className]
+            variable.possibles[selectResult.className] = true
+            local class = ctx.classes[selectResult.className]
             if class then
                 class.refs[variable.id] = true
             end
         end
         -- 其他select结果在第二阶段处理
+    elseif valueType == 'getlocal' or valueType == 'getglobal' then
+        -- 变量引用作为赋值源
+        local varName = utils.getNodeName(valueSource)
+        if varName then
+            local currentScope = context.findCurrentScope(ctx, valueSource)
+            local targetSymbolId, targetSymbol = context.resolveName(ctx, varName, currentScope)
+            if targetSymbol then
+                targetSymbol.refs[variable.id] = true
+                -- 将目标变量的类型传播给当前变量
+                if targetSymbol.possibles then
+                    for possibleType, _ in pairs(targetSymbol.possibles) do
+                        variable.possibles[possibleType] = true
+                    end
+                end
+                
+                context.debug(ctx, "变量引用作为赋值: %s -> %s (目标ID: %s)", 
+                    variable.name, targetSymbol.name, targetSymbol.id)
+            else
+                context.debug(ctx, "未找到变量引用目标: %s", varName)
+            end
+        end
+    elseif valueType == 'getfield' then
+        -- 字段引用作为赋值源 (obj.field)
+        local objName = utils.getNodeName(valueSource.node)
+        local fieldName = utils.getNodeName(valueSource.field)
+        
+        if objName and fieldName then
+            local currentScope = context.findCurrentScope(ctx, valueSource)
+            local objSymbolId, objSymbol = context.resolveName(ctx, objName, currentScope)
+            if objSymbol then
+                -- 查找字段符号
+                local fieldSymbolId, fieldSymbol = context.resolveName(ctx, fieldName, objSymbol)
+                if fieldSymbol then
+                    fieldSymbol.refs[variable.id] = true
+                    -- 将字段的类型传播给当前变量
+                    if fieldSymbol.possibles then
+                        for possibleType, _ in pairs(fieldSymbol.possibles) do
+                            variable.possibles[possibleType] = true
+                        end
+                    end
+                    
+                    context.debug(ctx, "字段引用作为赋值: %s -> %s.%s (字段ID: %s)", 
+                        variable.name, objName, fieldName, fieldSymbol.id)
+                else
+                    context.debug(ctx, "未找到字段: %s.%s", objName, fieldName)
+                end
+            else
+                context.debug(ctx, "未找到对象: %s", objName)
+            end
+        end
+    elseif valueType == 'getindex' then
+        -- 索引引用作为赋值源 (obj[key])
+        local objName = utils.getNodeName(valueSource.node)
+        local indexKey = nil
+        
+        if valueSource.index and valueSource.index.type == 'string' then
+            indexKey = utils.getStringValue(valueSource.index)
+        elseif valueSource.index and valueSource.index.type == 'integer' then
+            indexKey = tostring(valueSource.index[1])
+        end
+        
+        if objName and indexKey then
+            local currentScope = context.findCurrentScope(ctx, valueSource)
+            local objSymbolId, objSymbol = context.resolveName(ctx, objName, currentScope)
+            if objSymbol then
+                local indexSymbolId, indexSymbol = context.resolveName(ctx, indexKey, objSymbol)
+                if indexSymbol then
+                    indexSymbol.refs[variable.id] = true
+                    -- 将索引的类型传播给当前变量
+                    if indexSymbol.possibles then
+                        for possibleType, _ in pairs(indexSymbol.possibles) do
+                            variable.possibles[possibleType] = true
+                        end
+                    end
+                    
+                    context.debug(ctx, "索引引用作为赋值: %s -> %s[%s] (索引ID: %s)", 
+                        variable.name, objName, indexKey, indexSymbol.id)
+                else
+                    context.debug(ctx, "未找到索引: %s[%s]", objName, indexKey)
+                end
+            else
+                context.debug(ctx, "未找到对象: %s", objName)
+            end
+        end
     end
-    
-    -- 变量引用（getlocal, getglobal）在第二轮扫描refs时处理
-    -- 不在这里处理，避免字符串依赖
 end
 
 -- 分析单个文件的引用关系（第二遍处理）
