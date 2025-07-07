@@ -395,7 +395,7 @@ end
 local function propagateTypesThroughReferences(ctx)
     local changes = true
     local iterations = 0
-    local maxIterations = 10
+    local maxIterations = 2
     
     context.debug(ctx, "🔄 开始基于reference关系的类型传播")
     
@@ -448,18 +448,193 @@ local function propagateTypesThroughReferences(ctx)
     context.debug(ctx, "✅ 类型传播完成，共%d轮迭代", iterations)
 end
 
+-- 查找赋值目标变量（用于构造函数调用的类型推断）
+local function findAssignmentTargets(ctx, callInfo)
+    local targets = {}
+    
+    -- 这是一个简化的实现，实际需要通过AST分析来找到赋值语句
+    -- 对于构造函数调用，我们需要找到形如 `local obj = player:new()` 的语句
+    
+    if callInfo.location and callInfo.location.uri then
+        local uri = callInfo.location.uri
+        local module = ctx.uriToModule[uri]
+        
+        if module and module.ast then
+            -- 遍历AST查找赋值语句
+            guide.eachSource(module.ast, function(source)
+                -- 处理local变量赋值：local obj = player:new()
+                if source.type == 'local' and source.value then
+                    -- 检查是否是我们要找的调用
+                    for i, value in ipairs(source.value) do
+                        if value.type == 'call' then
+                            local valueCallName = utils.getCallName(value)
+                            if valueCallName == callInfo.callName then
+                                -- 找到了匹配的赋值语句
+                                local varName = source[i]
+                                if varName then
+                                    -- 查找对应的变量符号
+                                    local currentScope = context.findCurrentScope(ctx, source)
+                                    local varSymbolId, varSymbol = context.resolveName(ctx, varName, currentScope)
+                                    if varSymbol then
+                                        table.insert(targets, varSymbol)
+                                        context.debug(ctx, "    找到local赋值目标: %s", varName)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                -- 处理成员赋值：self.x = player.new() 或 obj.field = player.new()
+                if source.type == 'setfield' and source.value and source.value.type == 'call' then
+                    local valueCallName = utils.getCallName(source.value)
+                    if valueCallName == callInfo.callName then
+                        -- 找到了匹配的成员赋值
+                        local objName = utils.getNodeName(source.node)
+                        local fieldName = utils.getNodeName(source.field)
+                        
+                        if objName and fieldName then
+                            context.debug(ctx, "    找到成员赋值: %s.%s = %s", objName, fieldName, valueCallName)
+                            
+                            -- 查找对象符号
+                            local currentScope = context.findCurrentScope(ctx, source)
+                            local objSymbolId, objSymbol = context.resolveName(ctx, objName, currentScope)
+                            
+                            if objSymbol then
+                                -- 查找或创建成员变量符号
+                                local memberSymbolId, memberSymbol = context.resolveName(ctx, fieldName, objSymbol)
+                                if not memberSymbol then
+                                    -- 创建新的成员变量
+                                    memberSymbol = context.addVariable(ctx, fieldName, source.field, objSymbol)
+                                    memberSymbol.isMember = true
+                                    context.debug(ctx, "    创建成员变量: %s.%s", objName, fieldName)
+                                end
+                                
+                                if memberSymbol then
+                                    table.insert(targets, memberSymbol)
+                                    context.debug(ctx, "    找到成员赋值目标: %s.%s", objName, fieldName)
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                -- 处理全局变量赋值：globalVar = player.new()
+                if source.type == 'setglobal' and source.value and source.value.type == 'call' then
+                    local valueCallName = utils.getCallName(source.value)
+                    if valueCallName == callInfo.callName then
+                        local varName = utils.getNodeName(source.node)
+                        if varName then
+                            context.debug(ctx, "    找到全局赋值: %s = %s", varName, valueCallName)
+                            
+                            -- 查找全局变量符号
+                            local varSymbolId, varSymbol = context.findVariableSymbol(ctx, varName, nil)
+                            if varSymbol then
+                                table.insert(targets, varSymbol)
+                                context.debug(ctx, "    找到全局赋值目标: %s", varName)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+    
+    return targets
+end
+
 -- 基于call信息进行类型推断
 local function inferTypesFromCalls(ctx)
     local inferredCount = 0
     
     context.debug(ctx, "🔄 开始基于call信息的类型推断")
     
-    if not ctx.calls then
+    if not ctx.calls or not ctx.calls.callInfos then
         context.debug(ctx, "❌ 没有找到call信息")
         return
     end
     
-    for _, callInfo in pairs(ctx.calls) do
+    -- 遍历所有调用信息
+    for _, callInfo in ipairs(ctx.calls.callInfos) do
+        local callName = callInfo.callName
+        
+        -- 检查是否为构造函数调用
+        if callName and (callName:find(':new') or callName:find('%.new')) then
+            context.debug(ctx, "🔍 分析构造函数调用: %s", callName)
+            
+            -- 提取类名
+            local className = nil
+            if callName:find(':new') then
+                className = callName:match('([^:]+):new')
+            elseif callName:find('%.new') then
+                className = callName:match('([^.]+)%.new')
+            end
+            
+            if className then
+                context.debug(ctx, "  提取类名: %s", className)
+                
+                -- 查找类符号
+                local classSymbol = nil
+                for _, symbol in pairs(ctx.symbols) do
+                    if symbol.type == SYMBOL_TYPE.CLASS and symbol.name == className then
+                        classSymbol = symbol
+                        break
+                    end
+                end
+                
+                if classSymbol then
+                    context.debug(ctx, "  找到类符号: %s", classSymbol.name)
+                    
+                    -- 查找当前作用域中可能被赋值的local变量
+                    -- 这需要通过AST分析来找到赋值语句
+                    local targetVariables = findAssignmentTargets(ctx, callInfo)
+                    
+                    for _, varSymbol in ipairs(targetVariables) do
+                        if varSymbol.isLocal or varSymbol.isMember then
+                            -- 为local变量或成员变量推断类型
+                            if addTypeToPossibles(ctx, varSymbol, classSymbol.name) then
+                                context.debug(ctx, "  ✅ 推断类型: %s -> %s (构造函数: %s)", 
+                                    varSymbol.name, classSymbol.name, callName)
+                                inferredCount = inferredCount + 1
+                            end
+                        end
+                    end
+                else
+                    context.debug(ctx, "  ❌ 未找到类符号: %s", className)
+                end
+            end
+        end
+        
+        -- 处理函数调用的参数类型推断
+        if callInfo.parameters and #callInfo.parameters > 0 and callInfo.targetSymbolId then
+            local targetSymbol = ctx.symbols[callInfo.targetSymbolId]
+            if targetSymbol and targetSymbol.type == SYMBOL_TYPE.METHOD then
+                context.debug(ctx, "🔍 分析函数调用参数类型推断: %s", callName)
+                
+                -- 查找函数的参数定义
+                if targetSymbol.parameters then
+                    for i, param in ipairs(callInfo.parameters) do
+                        if param.type == 'variable_reference' and param.symbolId then
+                            local argSymbol = ctx.symbols[param.symbolId]
+                            local paramSymbol = targetSymbol.parameters[i]
+                            
+                            if argSymbol and paramSymbol and argSymbol.possibles and next(argSymbol.possibles) then
+                                -- 将参数的类型信息传播到函数参数
+                                for typeName, _ in pairs(argSymbol.possibles) do
+                                    if addTypeToPossibles(ctx, paramSymbol, typeName) then
+                                        context.debug(ctx, "  ✅ 参数类型推断: %s[%d] -> %s (来自 %s)", 
+                                            targetSymbol.name, i, typeName, argSymbol.name)
+                                        inferredCount = inferredCount + 1
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- 处理普通方法调用的类型推断
         if callInfo.method then
             -- 通过方法调用推断类型
             local sourceSymbol = ctx.symbols[callInfo.source_symbolid]
@@ -472,9 +647,9 @@ local function inferTypesFromCalls(ctx)
                         for methodName, _ in pairs(classSymbol.methods) do
                             if methodName == callInfo.method then
                                 inferredType = className
-            break
-        end
-    end
+                                break
+                            end
+                        end
                     end
                     if inferredType then break end
                 end
@@ -579,6 +754,88 @@ local function buildTypeCallSummary(ctx)
     return callCount
 end
 
+-- 分析成员访问（getfield和getindex）
+local function analyzeMemberAccess(ctx)
+    context.debug(ctx, "🔄 开始分析成员访问")
+    
+    local accessCount = 0
+    
+    -- 获取所有文件的URI列表
+    local fileUris = context.getFiles(ctx)
+    
+    -- 遍历所有文件的AST
+    for _, uri in ipairs(fileUris) do
+        local state = files.getState(uri)
+        if state and state.ast then
+            -- 查找getfield和getindex节点
+            guide.eachSourceType(state.ast, 'getfield', function(source)
+                local objName = utils.getNodeName(source.node)
+                local fieldName = utils.getNodeName(source.field)
+                
+                if objName and fieldName then
+                    local currentScope = context.findCurrentScope(ctx, source)
+                    local position = utils.getNodePosition(source)
+                    
+                    -- 查找对象符号
+                    local objSymbolId, objSymbol = context.resolveName(ctx, objName, currentScope)
+                    local memberSymbolId = nil
+                    
+                    -- 查找成员符号
+                    if objSymbol then
+                        memberSymbolId, _ = context.resolveName(ctx, fieldName, objSymbol)
+                    end
+                    
+                    -- 记录成员访问
+                    context.addMemberAccess(ctx, 'field', objSymbolId, fieldName, memberSymbolId, {
+                        uri = uri,
+                        line = position.line,
+                        column = position.column
+                    })
+                    
+                    accessCount = accessCount + 1
+                end
+            end)
+            
+            guide.eachSourceType(state.ast, 'getindex', function(source)
+                local objName = utils.getNodeName(source.node)
+                local indexKey = nil
+                
+                if source.index and source.index.type == 'string' then
+                    indexKey = utils.getStringValue(source.index)
+                elseif source.index and source.index.type == 'integer' then
+                    indexKey = tostring(source.index[1])
+                end
+                
+                if objName and indexKey then
+                    local currentScope = context.findCurrentScope(ctx, source)
+                    local position = utils.getNodePosition(source)
+                    
+                    -- 查找对象符号
+                    local objSymbolId, objSymbol = context.resolveName(ctx, objName, currentScope)
+                    local memberSymbolId = nil
+                    
+                    -- 查找成员符号
+                    if objSymbol then
+                        memberSymbolId, _ = context.resolveName(ctx, indexKey, objSymbol)
+                    end
+                    
+                    -- 记录成员访问
+                    context.addMemberAccess(ctx, 'index', objSymbolId, indexKey, memberSymbolId, {
+                        uri = uri,
+                        line = position.line,
+                        column = position.column
+                    })
+                    
+                    accessCount = accessCount + 1
+                end
+            end)
+        end
+    end
+    
+    context.debug(ctx, "✅ 成员访问分析完成，共记录 %d 个访问", accessCount)
+    return accessCount
+end
+
 -- 第2轮操作：数据流分析
 local function performDataFlowAnalysis(ctx)
     -- 重置节点去重状态
@@ -602,6 +859,9 @@ local function performDataFlowAnalysis(ctx)
     
     -- 4. 建立类型间调用关系汇总
     local typeCallSummaryCount = buildTypeCallSummary(ctx)
+    
+    -- 5. 分析成员访问
+    local memberAccessCount = analyzeMemberAccess(ctx)
     
 
 end

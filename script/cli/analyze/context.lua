@@ -60,6 +60,16 @@ function context.new(rootUri, options)
             }
         },
         
+        -- 成员访问信息（新增）
+        memberAccess = {
+            accessInfos = {},       -- 成员访问信息列表
+            accessStatistics = {
+                totalAccesses = 0,
+                fieldAccesses = 0,
+                indexAccesses = 0
+            }
+        },
+        
         -- 统计信息
         statistics = {
             totalFiles = 0,
@@ -214,10 +224,48 @@ function context.shouldExcludeDirectory(ctx, dirPath)
 end
 
 -- 添加实体
-function context.addEntity(ctx, entityType, entityData)
-    entityData.type = entityType
-    table.insert(ctx.entities, entityData)
+function context.addEntity(ctx, entityType, symbolId, name)
+    -- 为每个entity生成唯一id
+    local entityId = context.generateId(ctx, 'entity')
+    
+    local entity = {
+        id = entityId,
+        type = entityType,
+        symbolId = symbolId,
+        name = name
+    }
+    
+    table.insert(ctx.entities, entity)
     ctx.statistics.totalEntities = ctx.statistics.totalEntities + 1
+    
+    return entity
+end
+
+-- 添加成员访问信息
+function context.addMemberAccess(ctx, accessType, objectSymbolId, memberName, memberSymbolId, location)
+    local accessInfo = {
+        accessType = accessType,        -- 'field' 或 'index'
+        objectSymbolId = objectSymbolId,
+        memberName = memberName,
+        memberSymbolId = memberSymbolId,
+        location = location,
+        timestamp = os.time()
+    }
+    
+    table.insert(ctx.memberAccess.accessInfos, accessInfo)
+    ctx.memberAccess.accessStatistics.totalAccesses = ctx.memberAccess.accessStatistics.totalAccesses + 1
+    
+    if accessType == 'field' then
+        ctx.memberAccess.accessStatistics.fieldAccesses = ctx.memberAccess.accessStatistics.fieldAccesses + 1
+    elseif accessType == 'index' then
+        ctx.memberAccess.accessStatistics.indexAccesses = ctx.memberAccess.accessStatistics.indexAccesses + 1
+    end
+    
+    context.debug(ctx, "📋 记录成员访问: %s.%s (类型: %s, 对象ID: %s, 成员ID: %s)", 
+        objectSymbolId or "unknown", memberName or "unknown", accessType, 
+        objectSymbolId or "nil", memberSymbolId or "nil")
+    
+    return accessInfo
 end
 
 -- 添加关系

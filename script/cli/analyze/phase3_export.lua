@@ -39,9 +39,7 @@ local function exportModuleEntities(ctx)
             end
         end
         
-        context.addEntity(ctx, 'module', {
-            symbolId = module.id
-        })
+        context.addEntity(ctx, 'module', module.id, module.name)
         
         moduleCount = moduleCount + 1
     end
@@ -55,20 +53,8 @@ local function exportClassEntities(ctx)
     local classCount = 0
     
     for className, class in pairs(ctx.classes) do
-        local filePath = nil
-        if class.ast and ctx.uriToModule then
-            -- 查找对应的URI
-            for uri, mod in pairs(ctx.uriToModule) do
-                if mod.id == class.parent.id then
-                    filePath = furi.decode(uri)
-                    break
-                end
-            end
-        end
         
-        context.addEntity(ctx, 'class', {
-            symbolId = class.id
-        })
+        context.addEntity(ctx, 'class', class.id, class.name)
         
         classCount = classCount + 1
     end
@@ -83,20 +69,8 @@ local function exportFunctionEntities(ctx)
     
     for symbolId, symbol in pairs(ctx.symbols) do
         if symbol.type == SYMBOL_TYPE.METHOD then
-            local filePath = nil
-            if symbol.parent and ctx.uriToModule then
-                -- 查找对应的URI
-                for uri, mod in pairs(ctx.uriToModule) do
-                    if mod.id == symbol.parent.id then
-                        filePath = furi.decode(uri)
-                        break
-                    end
-                end
-            end
             
-            context.addEntity(ctx, 'function', {
-                symbolId = symbol.id
-            })
+            context.addEntity(ctx, 'function', symbol.id, symbol.name)
             
             functionCount = functionCount + 1
         end
@@ -112,15 +86,31 @@ local function exportVariableEntities(ctx)
     
     for id, symbol in pairs(ctx.symbols) do
         if symbol.type == SYMBOL_TYPE.VARIABLE then
-            context.addEntity(ctx, 'variable', {
-                symbolId = id
-            })
+            -- 排除local变量
+            if symbol.isLocal then
+                context.debug(ctx, "跳过local变量: %s", symbol.name)
+                goto continue
+            end
+            
+            context.addEntity(ctx, 'variable', symbol.id, symbol.name)
             variableCount = variableCount + 1
         end
+        
+        ::continue::
     end
     
     context.debug(ctx, "导出变量实体: %d", variableCount)
     return variableCount
+end
+
+-- 查找实体ID通过symbolId
+local function findEntityIdBySymbolId(ctx, symbolId)
+    for _, entity in ipairs(ctx.entities) do
+        if entity.symbolId == symbolId then
+            return entity.id
+        end
+    end
+    return nil
 end
 
 -- 导出包含关系
@@ -130,25 +120,11 @@ local function exportContainmentRelations(ctx)
     -- 模块包含类
     for moduleName, module in pairs(ctx.modules) do
         if module.classes and #module.classes > 0 then
-            -- 查找模块实体
-            local moduleEntityId = nil
-            for _, entity in ipairs(ctx.entities) do
-                if entity.type == 'module' and entity.symbolId == module.id then
-                    moduleEntityId = entity.id
-                    break
-                end
-            end
+            local moduleEntityId = findEntityIdBySymbolId(ctx, module.id)
             
             if moduleEntityId then
                 for _, classId in ipairs(module.classes) do
-                    -- 查找类实体
-                    local classEntityId = nil
-                    for _, entity in ipairs(ctx.entities) do
-                        if entity.type == 'class' and entity.symbolId == classId then
-                            classEntityId = entity.id
-                            break
-                        end
-                    end
+                    local classEntityId = findEntityIdBySymbolId(ctx, classId)
                     
                     if classEntityId then
                         context.addRelation(ctx, 'contains', moduleEntityId, classEntityId)
@@ -160,30 +136,25 @@ local function exportContainmentRelations(ctx)
         
         -- 模块包含函数
         if module.methods and #module.methods > 0 then
-            -- 查找模块实体
-            local moduleEntityId = nil
-            for _, entity in ipairs(ctx.entities) do
-                if entity.type == 'module' and entity.symbolId == module.id then
-                    moduleEntityId = entity.id
-                    break
-                end
-            end
+            local moduleEntityId = findEntityIdBySymbolId(ctx, module.id)
             
             if moduleEntityId then
                 for _, methodId in ipairs(module.methods) do
-                    -- 查找函数实体
-                    local functionEntityId = nil
-                    for _, entity in ipairs(ctx.entities) do
-                        if entity.type == 'function' and entity.symbolId == methodId then
-                            functionEntityId = entity.id
-                            break
-                        end
+                    -- 检查是否是local函数，如果是则跳过
+                    local methodSymbol = ctx.symbols[methodId]
+                    if methodSymbol and methodSymbol.isLocal then
+                        context.debug(ctx, "跳过local函数关系: %s", methodSymbol.name)
+                        goto continue_method
                     end
+                    
+                    local functionEntityId = findEntityIdBySymbolId(ctx, methodId)
                     
                     if functionEntityId then
                         context.addRelation(ctx, 'contains', moduleEntityId, functionEntityId)
                         relationCount = relationCount + 1
                     end
+                    
+                    ::continue_method::
                 end
             end
         end
@@ -192,30 +163,25 @@ local function exportContainmentRelations(ctx)
     -- 类包含函数
     for className, class in pairs(ctx.classes) do
         if class.methods and #class.methods > 0 then
-            -- 查找类实体
-            local classEntityId = nil
-            for _, entity in ipairs(ctx.entities) do
-                if entity.type == 'class' and entity.symbolId == class.id then
-                    classEntityId = entity.id
-                    break
-                end
-            end
+            local classEntityId = findEntityIdBySymbolId(ctx, class.id)
             
             if classEntityId then
                 for _, methodId in ipairs(class.methods) do
-                    -- 查找函数实体
-                    local functionEntityId = nil
-                    for _, entity in ipairs(ctx.entities) do
-                        if entity.type == 'function' and entity.symbolId == methodId then
-                            functionEntityId = entity.id
-                            break
-                        end
+                    -- 检查是否是local函数，如果是则跳过
+                    local methodSymbol = ctx.symbols[methodId]
+                    if methodSymbol and methodSymbol.isLocal then
+                        context.debug(ctx, "跳过local函数关系: %s", methodSymbol.name)
+                        goto continue_class_method
                     end
+                    
+                    local functionEntityId = findEntityIdBySymbolId(ctx, methodId)
                     
                     if functionEntityId then
                         context.addRelation(ctx, 'contains', classEntityId, functionEntityId)
                         relationCount = relationCount + 1
                     end
+                    
+                    ::continue_class_method::
                 end
             end
         end
@@ -230,34 +196,37 @@ local function exportReferenceRelations(ctx)
     local relationCount = 0
     
     for symbolId, symbol in pairs(ctx.symbols) do
+        -- 排除local符号的引用关系
+        if symbol.isLocal then
+            context.debug(ctx, "跳过local符号的引用关系: %s", symbol.name)
+            goto continue
+        end
+        
         if symbol.refs and next(symbol.refs) then
-            -- 查找源实体
-            local sourceEntityId = nil
-            for _, entity in ipairs(ctx.entities) do
-                if entity.symbolId == symbolId then
-                    sourceEntityId = entity.id
-                    break
-                end
-            end
+            local sourceEntityId = findEntityIdBySymbolId(ctx, symbolId)
             
             if sourceEntityId then
                 for refId, _ in pairs(symbol.refs) do
-                    -- 查找目标实体
-                    local targetEntityId = nil
-                    for _, entity in ipairs(ctx.entities) do
-                        if entity.symbolId == refId then
-                            targetEntityId = entity.id
-                            break
-                        end
+                    -- 检查被引用的符号是否是local
+                    local refSymbol = ctx.symbols[refId]
+                    if refSymbol and refSymbol.isLocal then
+                        context.debug(ctx, "跳过对local符号的引用: %s -> %s", symbol.name, refSymbol.name)
+                        goto continue_ref
                     end
+                    
+                    local targetEntityId = findEntityIdBySymbolId(ctx, refId)
                     
                     if targetEntityId then
                         context.addRelation(ctx, 'references', sourceEntityId, targetEntityId)
                         relationCount = relationCount + 1
                     end
+                    
+                    ::continue_ref::
                 end
             end
         end
+        
+        ::continue::
     end
     
     context.debug(ctx, "导出了 %d 个引用关系", relationCount)
@@ -270,28 +239,29 @@ local function exportAliasRelations(ctx)
     
     if ctx.symbols.aliases then
         for aliasName, aliasInfo in pairs(ctx.symbols.aliases) do
-            -- 查找别名实体
-            local aliasEntityId = nil
-            for _, entity in ipairs(ctx.entities) do
-                if entity.symbolId == aliasInfo.symbolId then
-                    aliasEntityId = entity.id
-                    break
-                end
+            -- 检查别名是否是local
+            local aliasSymbol = ctx.symbols[aliasInfo.symbolId]
+            if aliasSymbol and aliasSymbol.isLocal then
+                context.debug(ctx, "跳过local别名关系: %s", aliasName)
+                goto continue
             end
             
-            -- 查找目标实体
-            local targetEntityId = nil
-            for _, entity in ipairs(ctx.entities) do
-                if entity.symbolId == aliasInfo.targetId then
-                    targetEntityId = entity.id
-                    break
-                end
+            -- 检查目标是否是local
+            local targetSymbol = ctx.symbols[aliasInfo.targetId]
+            if targetSymbol and targetSymbol.isLocal then
+                context.debug(ctx, "跳过指向local符号的别名关系: %s -> %s", aliasName, targetSymbol.name)
+                goto continue
             end
+            
+            local aliasEntityId = findEntityIdBySymbolId(ctx, aliasInfo.symbolId)
+            local targetEntityId = findEntityIdBySymbolId(ctx, aliasInfo.targetId)
             
             if aliasEntityId and targetEntityId then
                 context.addRelation(ctx, 'alias_of', aliasEntityId, targetEntityId)
                 relationCount = relationCount + 1
             end
+            
+            ::continue::
         end
     end
     
@@ -307,14 +277,7 @@ local function exportInheritanceRelations(ctx)
     
     for className, class in pairs(ctx.classes) do
         if class.parentClasses and #class.parentClasses > 0 then
-            -- 查找子类实体
-            local childEntityId = nil
-            for _, entity in ipairs(ctx.entities) do
-                if entity.type == 'class' and entity.symbolId == class.id then
-                    childEntityId = entity.id
-                    break
-                end
-            end
+            local childEntityId = findEntityIdBySymbolId(ctx, class.id)
             
             if childEntityId then
                 -- 现在parentClasses是一个简化的数组，直接包含父类ID或名称
@@ -324,11 +287,14 @@ local function exportInheritanceRelations(ctx)
                     
                     -- 如果parentId是符号ID，直接查找
                     if ctx.symbols[parentId] then
-                        for _, entity in ipairs(ctx.entities) do
-                            if entity.symbolId == parentId then
-                                parentEntityId = entity.id
-                                parentName = entity.name
-                                break
+                        parentEntityId = findEntityIdBySymbolId(ctx, parentId)
+                        if parentEntityId then
+                            -- 从entity中获取name
+                            for _, entity in ipairs(ctx.entities) do
+                                if entity.id == parentEntityId then
+                                    parentName = entity.name
+                                    break
+                                end
                             end
                         end
                     else

@@ -39,8 +39,11 @@ function GM.CreateNewGame()
 end
 
 -- 模拟战斗
-function GM.SimulateBattle(obj1, obj2, obj3, obj4)
+function GM:SimulateBattle(obj1, obj2, obj3, obj4)
     print("\n=== Battle Simulation ===")
+    
+    self.x = player.new()
+    self.x:LevelUp()
     
     -- 使用武器进行攻击
     if obj3 and not obj3:IsBroken() then
