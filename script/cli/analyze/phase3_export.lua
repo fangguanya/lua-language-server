@@ -18,6 +18,57 @@ local phase3 = {}
 -- 节点跟踪器
 local tracker3 = nil
 
+-- 提取函数体代码
+local function extractFunctionBody(ctx, symbol)
+    if not symbol.ast then
+        return nil
+    end
+    
+    local ast = symbol.ast
+    if not ast.start or not ast.finish then
+        return nil
+    end
+    
+    -- 查找对应的文件URI
+    local fileUri = nil
+    if symbol.parent and ctx.uriToModule then
+        for uri, mod in pairs(ctx.uriToModule) do
+            if mod.id == symbol.parent.id then
+                fileUri = uri
+                break
+            end
+        end
+    end
+    
+    if not fileUri then
+        return nil
+    end
+    
+    -- 获取文件内容
+    local filePath = furi.decode(fileUri)
+    local file = io.open(filePath, 'r')
+    if not file then
+        return nil
+    end
+    
+    local content = file:read('*all')
+    file:close()
+    
+    if not content then
+        return nil
+    end
+    
+    -- 提取函数代码段
+    local startPos = ast.start
+    local endPos = ast.finish
+    
+    if startPos and endPos and startPos <= #content and endPos <= #content then
+        return content:sub(startPos, endPos)
+    end
+    
+    return nil
+end
+
 -- 导出模块实体
 local function exportModuleEntities(ctx)
     local moduleCount = 0
@@ -112,6 +163,9 @@ local function exportFunctionEntities(ctx)
                 end
             end
             
+            -- 提取函数体代码
+            local functionBody = extractFunctionBody(ctx, symbol)
+            
             local entityId = context.addEntity(ctx, 'function', {
                 name = symbol.name,
                 symbolId = symbol.id,
@@ -120,6 +174,7 @@ local function exportFunctionEntities(ctx)
                 isAnonymous = symbol:IsAnonymous(),
                 parameters = symbol.parameters or {},
                 variables = symbol.variables or {},
+                functionBody = functionBody, -- 添加完整的函数代码段
                 category = 'function',
                 sourceLocation = {
                     file = filePath,
@@ -427,120 +482,45 @@ local function exportInheritanceRelations(ctx)
             end
             
             if childEntityId then
-                for _, parentInfo in ipairs(class.parentClasses) do
-                    if parentInfo.type == 'component_list' then
-                        -- 组件列表 - 处理多重继承（mixin）
-                        for _, componentInfo in ipairs(parentInfo.components) do
-                            local componentEntityId = nil
-                            local componentName = componentInfo.name
-                            
-                            if componentInfo.symbolId then
-                                -- 已有symbolId，直接查找实体
-                                for _, entity in ipairs(ctx.entities) do
-                                    if entity.symbolId == componentInfo.symbolId then
-                                        componentEntityId = entity.id
-                                        break
-                                    end
-                                end
-                            else
-                                -- 没有symbolId，根据名称查找
-                                for _, entity in ipairs(ctx.entities) do
-                                    if (entity.type == 'class' or entity.type == 'variable') and entity.name == componentName then
-                                        componentEntityId = entity.id
-                                        break
-                                    end
-                                end
-                            end
-                            
-                            if componentEntityId then
-                                context.addRelation(ctx, 'mixes', childEntityId, componentEntityId, {
-                                    relationship = 'mixin_component',
-                                    componentName = componentName,
-                                    componentType = componentInfo.type,
-                                    description = componentInfo.description,
-                                    sourceLocation = {
-                                        file = nil,
-                                        line = 1,
-                                        column = 1
-                                    }
-                                })
-                                relationCount = relationCount + 1
-                                context.debug(ctx, "组件混合: %s -> %s (%s)", className, componentName, componentInfo.type)
-                            else
-                                -- 找不到组件，创建missing实体
-                                local missingEntityId = "entity_missing_" .. (componentName or "unknown")
-                                local missingEntity = {
-                                    id = missingEntityId,
-                                    type = 'missing_component',
-                                    name = (componentName or "unknown") .. "_missing",
-                                    category = 'missing',
-                                    parentId = nil,
-                                    sourceLocation = {
-                                        file = nil,
-                                        line = 1,
-                                        column = 1
-                                    },
-                                    symbolId = nil,
-                                    methods = {},
-                                    variables = {}
-                                }
-                                table.insert(ctx.entities, missingEntity)
-                                
-                                context.addRelation(ctx, 'mixes', childEntityId, missingEntityId, {
-                                    relationship = 'missing_mixin_component',
-                                    componentName = componentName,
-                                    componentType = componentInfo.type,
-                                    description = componentInfo.description,
-                                    sourceLocation = {
-                                        file = nil,
-                                        line = 1,
-                                        column = 1
-                                    }
-                                })
-                                relationCount = relationCount + 1
-                                context.debug(ctx, "组件缺失: %s -> %s_missing (%s)", className, componentName, componentInfo.description)
+                -- 现在parentClasses是一个简化的数组，直接包含父类ID或名称
+                for _, parentId in ipairs(class.parentClasses) do
+                    local parentEntityId = nil
+                    local parentName = parentId
+                    
+                    -- 如果parentId是符号ID，直接查找
+                    if ctx.symbols[parentId] then
+                        for _, entity in ipairs(ctx.entities) do
+                            if entity.symbolId == parentId then
+                                parentEntityId = entity.id
+                                parentName = entity.name
+                                break
                             end
                         end
                     else
-                        -- 单个父类
-                        local parentEntityId = nil
-                        local parentName = parentInfo.name
-                        
-                        if parentInfo.symbolId then
-                            -- 已有symbolId，直接查找实体
-                            for _, entity in ipairs(ctx.entities) do
-                                if entity.symbolId == parentInfo.symbolId then
-                                    parentEntityId = entity.id
-                                    break
-                                end
-                            end
-                        else
-                            -- 没有symbolId，根据名称和类型查找
-                            for _, entity in ipairs(ctx.entities) do
-                                if entity.type == 'class' and entity.name == parentName then
-                                    parentEntityId = entity.id
-                                    break
-                                end
+                        -- 如果是名称，根据名称查找
+                        for _, entity in ipairs(ctx.entities) do
+                            if entity.type == 'class' and entity.name == parentId then
+                                parentEntityId = entity.id
+                                parentName = entity.name
+                                break
                             end
                         end
-                        
-                        if parentEntityId then
-                            context.addRelation(ctx, 'inherits', childEntityId, parentEntityId, {
-                                relationship = 'class_inheritance',
-                                parentType = parentInfo.type,
-                                parentName = parentName,
-                                description = parentInfo.description,
-                                sourceLocation = {
-                                    file = nil,
-                                    line = 1,
-                                    column = 1
-                                }
-                            })
-                            relationCount = relationCount + 1
-                            context.debug(ctx, "继承关系: %s -> %s (%s)", className, parentName, parentInfo.type)
-                        else
-                            context.debug(ctx, "未找到父类实体: %s -> %s (%s)", className, parentName or "unknown", parentInfo.description)
-                        end
+                    end
+                    
+                    if parentEntityId then
+                        context.addRelation(ctx, 'inherits', childEntityId, parentEntityId, {
+                            relationship = 'class_inheritance',
+                            parentName = parentName,
+                            sourceLocation = {
+                                file = nil,
+                                line = 1,
+                                column = 1
+                            }
+                        })
+                        relationCount = relationCount + 1
+                        context.debug(ctx, "继承关系: %s -> %s", className, parentName)
+                    else
+                        context.debug(ctx, "未找到父类实体: %s -> %s", className, parentId)
                     end
                 end
             end

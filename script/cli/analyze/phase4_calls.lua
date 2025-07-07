@@ -190,6 +190,7 @@ local function resolveCallNameToRealType(ctx, callName, sourceSymbolId)
     -- 解析调用名称
     local className, methodName = callName:match('([^.:]+)[.:](.+)')
     if className and methodName then
+
         -- 查找当前项目中的类（直接匹配类名）
         for id, symbol in pairs(ctx.symbols) do
             if symbol.type == SYMBOL_TYPE.CLASS then
@@ -204,24 +205,10 @@ local function resolveCallNameToRealType(ctx, callName, sourceSymbolId)
         -- 查找当前项目中的变量，看是否引用了类或模块
         for id, symbol in pairs(ctx.symbols) do
             if symbol.type == SYMBOL_TYPE.VARIABLE and symbol.name == className then
-                -- 检查变量的可能类型
-                if symbol.possibles then
-                    for possibleType, _ in pairs(symbol.possibles) do
-                        -- 查找这个类型是否是项目中的类
-                        for classId, classSymbol in pairs(ctx.symbols) do
-                            if classSymbol.type == SYMBOL_TYPE.CLASS then
-                                local realClassName = classSymbol.aliasTargetName or classSymbol.name
-                                if realClassName == possibleType then
-                                    local separator = callName:find(':') and ':' or '.'
-                                    return realClassName .. separator .. methodName, 'class_method'
-                                end
-                            end
-                        end
-                    end
-                end
-                
-                -- 检查变量的别名目标
+                -- 优先检查变量的别名目标
                 if symbol.aliasTargetName then
+
+                    -- 查找别名目标是否是类名
                     for classId, classSymbol in pairs(ctx.symbols) do
                         if classSymbol.type == SYMBOL_TYPE.CLASS then
                             local realClassName = classSymbol.aliasTargetName or classSymbol.name
@@ -231,10 +218,143 @@ local function resolveCallNameToRealType(ctx, callName, sourceSymbolId)
                             end
                         end
                     end
+                    -- 如果别名目标不是类名，可能是模块名，查找该模块中的类
+                    for moduleId, moduleSymbol in pairs(ctx.symbols) do
+                        if moduleSymbol.type == SYMBOL_TYPE.MODULE and moduleSymbol.name == symbol.aliasTargetName then
+                            -- 查找该模块中的类
+                            for classId, classSymbol in pairs(ctx.symbols) do
+                                if classSymbol.type == SYMBOL_TYPE.CLASS and classSymbol.parent == moduleId then
+                                    local realClassName = classSymbol.aliasTargetName or classSymbol.name
+                                    local separator = callName:find(':') and ':' or '.'
+                                    return realClassName .. separator .. methodName, 'class_method'
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- 如果别名目标本身就是模块名，尝试直接使用
+                    if symbol.aliasTargetName then
+                        local separator = callName:find(':') and ':' or '.'
+                        return symbol.aliasTargetName .. separator .. methodName, 'external_call'
+                    end
+                end
+                -- 深度追踪变量的真实类型
+                local function resolveVariableType(varSymbol, visited)
+                    visited = visited or {}
+                    if visited[varSymbol.id] then
+                        return nil -- 避免循环引用
+                    end
+                    visited[varSymbol.id] = true
+                    
+                    -- 检查变量的可能类型
+                    if varSymbol.possibles then
+                        for possibleType, _ in pairs(varSymbol.possibles) do
+                            -- 查找这个类型是否是项目中的类
+                            for classId, classSymbol in pairs(ctx.symbols) do
+                                if classSymbol.type == SYMBOL_TYPE.CLASS then
+                                    local realClassName = classSymbol.aliasTargetName or classSymbol.name
+                                    if realClassName == possibleType then
+                                        return realClassName
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- 检查变量的关联关系
+                    if varSymbol.related then
+                        for relatedId, _ in pairs(varSymbol.related) do
+                            local relatedSymbol = ctx.symbols[relatedId]
+                            if relatedSymbol then
+                                if relatedSymbol.type == SYMBOL_TYPE.CLASS then
+                                    return relatedSymbol.aliasTargetName or relatedSymbol.name
+                                elseif relatedSymbol.type == SYMBOL_TYPE.VARIABLE then
+                                    local result = resolveVariableType(relatedSymbol, visited)
+                                    if result then
+                                        return result
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- 检查变量的引用关系
+                    if varSymbol.refs then
+                        for refId, _ in pairs(varSymbol.refs) do
+                            local refSymbol = ctx.symbols[refId]
+                            if refSymbol then
+                                if refSymbol.type == SYMBOL_TYPE.VARIABLE then
+                                    local result = resolveVariableType(refSymbol, visited)
+                                    if result then
+                                        return result
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- 反向查找：查找引用了当前变量的其他变量
+                    for otherId, otherSymbol in pairs(ctx.symbols) do
+                        if otherSymbol.type == SYMBOL_TYPE.VARIABLE and otherSymbol.refs then
+                            for refId, _ in pairs(otherSymbol.refs) do
+                                if refId == varSymbol.id then
+                                    -- 找到了引用当前变量的其他变量，递归解析
+                                    local result = resolveVariableType(otherSymbol, visited)
+                                    if result then
+                                        return result
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- 检查变量的别名目标
+                    if varSymbol.aliasTargetName then
+                        for classId, classSymbol in pairs(ctx.symbols) do
+                            if classSymbol.type == SYMBOL_TYPE.CLASS then
+                                local realClassName = classSymbol.aliasTargetName or classSymbol.name
+                                if realClassName == varSymbol.aliasTargetName then
+                                    return realClassName
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- 检查是否是require导入的模块
+                    -- 通过查找同名的require导入来追踪
+                    if varSymbol.parent then
+                        for requireId, requireSymbol in pairs(ctx.symbols) do
+                            if requireSymbol.type == SYMBOL_TYPE.REFERENCE and requireSymbol.localName == varSymbol.name then
+                                -- 找到了对应的require导入
+                                local targetModuleId = requireSymbol.target
+                                if targetModuleId then
+                                    local targetModule = ctx.symbols[targetModuleId]
+                                    if targetModule and targetModule.type == SYMBOL_TYPE.MODULE then
+                                        -- 查找该模块中的类
+                                        for classId, classSymbol in pairs(ctx.symbols) do
+                                            if classSymbol.type == SYMBOL_TYPE.CLASS and classSymbol.parent == targetModuleId then
+                                                local realClassName = classSymbol.aliasTargetName or classSymbol.name
+                                                return realClassName
+                                            end
+                                        end
+                                        -- 如果没有找到类，返回模块本身
+                                        return targetModule.name
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
+                    return nil
+                end
+                
+                local realClassName = resolveVariableType(symbol)
+                if realClassName then
+                    local separator = callName:find(':') and ':' or '.'
+                    return realClassName .. separator .. methodName, 'class_method'
                 end
                 
                 -- 检查是否是模块变量（通过require导入的）
-                -- 如果变量名与模块名匹配，检查该模块是否导出了同名类
                 for moduleId, moduleSymbol in pairs(ctx.symbols) do
                     if moduleSymbol.type == SYMBOL_TYPE.MODULE then
                         local moduleName = moduleSymbol.name or ""
@@ -423,11 +543,12 @@ local function processFunctionCalls(ctx)
                     context.debug(ctx, "函数调用关系: %s -> %s", callerTypeName, calleeTypeName)
                 end
             end
-        elseif callerEntity and callType == 'external_call' then
-            -- 处理外部调用
+        elseif callerEntity and (callType == 'external_call' or callType == 'class_method') then
+            -- 处理外部调用和类方法调用
+            local relationshipType = callType == 'class_method' and 'class_method_call' or 'external_call'
             for _, callerTypeName in ipairs(callerPossibleTypeNames) do
                 context.addRelation(ctx, 'calls', callerEntity.id, 'external', {
-                    relationship = 'external_call',
+                    relationship = relationshipType,
                     fromName = callerTypeName,
                     toName = resolvedCallName or callInfo.callName,
                     callName = resolvedCallName or callInfo.callName,
@@ -444,7 +565,8 @@ local function processFunctionCalls(ctx)
                 })
                 
                 functionCallCount = functionCallCount + 1
-                context.debug(ctx, "外部函数调用: %s -> %s", callerTypeName, resolvedCallName or callInfo.callName)
+                local callTypeDesc = callType == 'class_method' and "类方法调用" or "外部函数调用"
+                context.debug(ctx, "%s: %s -> %s", callTypeDesc, callerTypeName, resolvedCallName or callInfo.callName)
             end
         else
             context.debug(ctx, "未找到调用关系实体: %s -> %s (源ID: %s, 目标ID: %s, 调用类型: %s)", 

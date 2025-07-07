@@ -225,6 +225,18 @@ end
 
 -- 添加关系
 function context.addRelation(ctx, relationType, fromId, toId, metadata)
+    -- 过滤type_relation类型的关系
+    if relationType == 'type_relation' then
+        context.debug(ctx, "过滤type_relation关系: %s -> %s", fromId, toId)
+        return nil
+    end
+    
+    -- 过滤from或to是external的关系
+    if fromId == 'external' or toId == 'external' then
+        context.debug(ctx, "过滤external关系: %s -> %s", fromId, toId)
+        return nil
+    end
+    
     local id = context.generateId(ctx, "relation")
     local relation = {
         id = id,
@@ -458,7 +470,13 @@ local function deepClean(obj, visited)
             
             if shouldInclude then
                 local cleanKey = deepClean(key, visited)
+                if type(cleanKey) == 'table' and cleanKey.parent then
+                    cleanKey.parent = nil
+                end
                 local cleanValue = deepClean(value, visited)
+                if type(cleanValue) == 'table' and cleanValue.parent then
+                    cleanValue.parent = nil
+                end
                 
                 if cleanKey ~= nil then
                     -- 对于空表也要保留（如空的references或refs数组）
@@ -496,6 +514,10 @@ function context.getSerializableSymbols(ctx)
             
             -- 移除AST引用（通常包含函数）
             if cleanSymbol then
+                -- 移除parent字段
+                if cleanSymbol.parent then
+                    cleanSymbol.parent = nil
+                end
                 serializableSymbols[id] = cleanSymbol
             end
         end
