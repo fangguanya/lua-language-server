@@ -132,6 +132,7 @@ function analyzeGlobalVariableDefinition(ctx, uri, module, source)
                 -- 创建类的别名变量（作为普通容器）
                 local aliasVar = context.addVariable(ctx, varName, source, module)
                 table.insert(aliasVar.possibles, className)
+                class.refs[aliasVar.id] = true
                 
                 context.debug(ctx, "全局类别名: %s -> %s", varName, className)
                 return
@@ -195,6 +196,7 @@ function analyzeLocalVariableDefinition(ctx, uri, module, source)
                 if class then
                     -- 更新变量的类型
                     table.insert(existingVar.possibles, className)
+                    class.refs[existingVar.id] = true
                     
                     context.debug(ctx, "局部变量类别名: %s -> %s", varName, className)
                     return
@@ -390,7 +392,6 @@ function analyzeLocalStatement(ctx, uri, module, source)
         
         -- 检查是否是require语句
         if value and (value.type == 'call' or value.type == 'select') then
-            local result = nil
             if value.type == 'call' then
                 callResult = analyzeCallExpression(ctx, uri, module, value)
             elseif value.type == 'select' then
@@ -412,6 +413,7 @@ function analyzeLocalStatement(ctx, uri, module, source)
                     -- 创建类的别名变量
                     local aliasVar = context.addVariable(ctx, varName, source, currentScope)
                     table.insert(aliasVar.possibles, className)
+                    class.refs[aliasVar.id] = true
                     
                     context.debug(ctx, "局部类别名: %s -> %s", varName, className)
                     return
@@ -971,6 +973,10 @@ function analyzeValueAssignment(ctx, uri, module, variable, valueSource)
         if callResult and callResult.isClassDefinition then
             -- 类定义调用，可以立即确定类型
             table.insert(variable.possibles, callResult.className)
+            local class = ctx.classes[callResult.className]
+            if class then
+                class.refs[variable.id] = true
+            end
         end
         -- 其他函数调用结果在第二阶段处理
     elseif valueType == 'select' then
@@ -979,6 +985,10 @@ function analyzeValueAssignment(ctx, uri, module, variable, valueSource)
         if selectResult and selectResult.isClassDefinition then
             -- 类定义调用，可以立即确定类型
             table.insert(variable.possibles, selectResult.className)
+            local class = ctx.classes[callResult.className]
+            if class then
+                class.refs[variable.id] = true
+            end
         end
         -- 其他select结果在第二阶段处理
     end

@@ -170,7 +170,7 @@ local function recordAllCallInfos(ctx)
         ctx.calls.callStatistics.resolvedCalls, ctx.calls.callStatistics.unresolvedCalls))
 end
 
--- 添加类型到possibles数组，确保去重和别名处理
+-- 添加类型到possibles哈希表，确保去重和别名处理
 local function addTypeToPossibles(ctx, symbol, newType)
     if not symbol.possibles then
         symbol.possibles = {}
@@ -193,14 +193,12 @@ local function addTypeToPossibles(ctx, symbol, newType)
     end
     
     -- 检查是否已存在（包括原类型和最终类型）
-    for _, existingType in pairs(symbol.possibles) do
-        if existingType == newType or existingType == finalType then
-            return false -- 已存在，不添加
-        end
+    if symbol.possibles[newType] or symbol.possibles[finalType] then
+        return false -- 已存在，不添加
     end
     
-    -- 添加最终类型
-    table.insert(symbol.possibles, finalType)
+    -- 添加最终类型到哈希表
+    symbol.possibles[finalType] = true
     return true
 end
 
@@ -227,7 +225,7 @@ local function propagateTypesThroughReferences(ctx)
                         -- 双向类型传播
                         -- 1. 从refSymbol传播到symbol
                         if refSymbol.possibles and next(refSymbol.possibles) then
-                            for _, possibleType in pairs(refSymbol.possibles) do
+                            for possibleType, _ in pairs(refSymbol.possibles) do
                                 if addTypeToPossibles(ctx, symbol, possibleType) then
                                     changes = true
                                 end
@@ -241,7 +239,7 @@ local function propagateTypesThroughReferences(ctx)
                         
                         -- 2. 从symbol传播到refSymbol
                         if symbol.possibles and next(symbol.possibles) then
-                            for _, possibleType in pairs(symbol.possibles) do
+                            for possibleType, _ in pairs(symbol.possibles) do
                                 if addTypeToPossibles(ctx, refSymbol, possibleType) then
                                     changes = true
                                 end
@@ -318,7 +316,7 @@ local function buildTypeRelations(ctx)
     
     for symbolId, symbol in pairs(ctx.symbols) do
         if symbol.possibles and next(symbol.possibles) then
-            for _, possibleType in pairs(symbol.possibles) do
+            for possibleType, _ in pairs(symbol.possibles) do
                 -- 解析别名，获取最终类型
                 local finalType = possibleType
                 local aliasTarget = nil

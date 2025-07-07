@@ -160,12 +160,20 @@ local function exportVariableEntities(ctx)
                 inferredType = ctx.types.inferred[symbolId].type
             end
             
+            -- 将 possibles 哈希表转换为数组（为了兼容性）
+            local possiblesArray = {}
+            if symbol.possibles then
+                for possibleType, _ in pairs(symbol.possibles) do
+                    table.insert(possiblesArray, possibleType)
+                end
+            end
+            
             local entityId = context.addEntity(ctx, 'variable', {
                 name = symbol.name,
                 symbolId = symbol.id,
                 parentId = symbol.parent and symbol.parent.id or nil,
                 parentName = symbol.parent and symbol.parent.name or nil,
-                possibles = symbol.possibles or {},
+                possibles = possiblesArray,
                 inferredType = inferredType,
                 isAlias = symbol.isAlias or false,
                 aliasTarget = symbol.aliasTarget,
