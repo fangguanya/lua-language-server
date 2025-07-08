@@ -20,7 +20,12 @@ local phase2 = {}
 local tracker1 = nil
 local tracker2 = nil
 
--- 获取符号的所有可能类型名称（严格基于数据流分析）
+-- 性能优化：添加缓存机制
+local symbolCache = {}
+local typeCache = {}
+local callNameCache = {}
+
+-- 获取符号的所有可能类型名称（原始版本，供缓存版本使用）
 local function getAllPossibleTypeNames(ctx, symbolId)
     if not symbolId then
         return {}
@@ -32,7 +37,7 @@ local function getAllPossibleTypeNames(ctx, symbolId)
     end
     
     local possibleTypes = {}
-    
+
     -- 如果是方法，查找其所属的类或模块
     if symbol.type == SYMBOL_TYPE.METHOD then
         -- 查找父符号
@@ -63,7 +68,7 @@ local function getAllPossibleTypeNames(ctx, symbolId)
                 table.insert(possibleTypes, possibleType)
             end
         end
-        
+
         -- 检查是否是类的别名
         if symbol.aliasTargetName then
             table.insert(possibleTypes, symbol.aliasTargetName)
@@ -81,7 +86,7 @@ local function getAllPossibleTypeNames(ctx, symbolId)
             end
         end
     end
-    
+
     -- 如果是模块，返回模块名
     if symbol.type == SYMBOL_TYPE.MODULE then
         table.insert(possibleTypes, symbol.aliasTargetName or symbol.name)
@@ -90,48 +95,192 @@ local function getAllPossibleTypeNames(ctx, symbolId)
     return possibleTypes
 end
 
--- 记录call信息
-local function recordCallInfo(ctx, uri, moduleId, source, providedCallName)
-    local callName = providedCallName or utils.getCallName(source)
-    if not callName then
-        -- 特殊处理getmethod类型的调用
-        if source and source.type == 'call' and source.node and source.node.type == 'getmethod' then
-            local objNode = source.node.node
-            local methodNode = source.node.method
-            local obj = utils.getNodeName(objNode)
-            local method = utils.getNodeName(methodNode)
-            
-            if method then
-                -- 如果obj为nil，尝试其他方式获取对象名
-                if not obj and objNode then
-                    if objNode.type == 'getlocal' then
-                        obj = objNode[1]  -- 直接获取变量名
-                    elseif objNode.type == 'getglobal' then
-                        obj = objNode[1]  -- 直接获取全局变量名
-                    elseif objNode.type == 'getfield' then
-                        -- 可能是复杂的字段访问
-                        local baseObj = utils.getNodeName(objNode.node)
-                        local field = utils.getNodeName(objNode.field)
-                        if baseObj and field then
-                            obj = baseObj .. '.' .. field
-                        end
-                    end
-                end
-                
-                if obj and method then
-                    callName = obj .. ':' .. method
-                end
+-- 清理缓存（在新的分析开始时调用）
+local function clearCaches()
+    symbolCache = {}
+    typeCache = {}
+    callNameCache = {}
+end
+
+-- 缓存的符号查找
+local function findFunctionSymbolCached(ctx, callName)
+    if symbolCache[callName] then
+        return symbolCache[callName].id, symbolCache[callName].symbol
+    end
+    
+    local id, symbol = context.findFunctionSymbol(ctx, callName)
+    symbolCache[callName] = { id = id, symbol = symbol }
+    return id, symbol
+end
+
+-- 缓存的类型获取
+local function getAllPossibleTypeNamesCached(ctx, symbolId)
+    if not symbolId then return {} end
+    
+    if typeCache[symbolId] then
+        return typeCache[symbolId]
+    end
+    
+    local types = getAllPossibleTypeNames(ctx, symbolId)
+    typeCache[symbolId] = types
+    return types
+end
+
+-- 优化的调用名称获取
+local function getCallNameOptimized(source, providedCallName)
+    if providedCallName then
+        return providedCallName
+    end
+    
+    -- 缓存key基于source的位置和类型
+    local cacheKey = string.format("%s_%d_%d", source.type, source.start or 0, source.finish or 0)
+    if callNameCache[cacheKey] then
+        return callNameCache[cacheKey]
+    end
+    
+    local callName = utils.getCallName(source)
+    
+    -- 特殊处理getmethod类型的调用（优化版本）
+    if not callName and source.type == 'call' and source.node and source.node.type == 'getmethod' then
+        local objNode = source.node.node
+        local methodNode = source.node.method
+        
+        -- 快速获取节点名称
+        local obj, method
+        if objNode.type == 'getlocal' then
+            obj = objNode[1]
+        elseif objNode.type == 'getglobal' then
+            obj = objNode[1]
+        elseif objNode.type == 'getfield' then
+            local baseObj = objNode.node and objNode.node[1]
+            local field = objNode.field and objNode.field[1]
+            if baseObj and field then
+                obj = baseObj .. '.' .. field
             end
+        else
+            obj = utils.getNodeName(objNode)
         end
         
-        if not callName then
-            return
+        if methodNode.type == 'string' then
+            method = methodNode[1]
+        else
+            method = utils.getNodeName(methodNode)
         end
+        
+        if obj and method then
+            callName = obj .. ':' .. method
+        end
+    end
+    
+    callNameCache[cacheKey] = callName
+    return callName
+end
+
+-- 简化的参数分析（只分析必要信息）
+local function analyzeParametersOptimized(source, currentScope, ctx)
+    if not source.args then
+        return {}
+    end
+    
+    local parameters = {}
+    for i, arg in ipairs(source.args) do
+        local param = {
+            index = i,
+            type = arg.type,
+            value = nil
+        }
+        
+        -- 只分析最常见的参数类型
+        if arg.type == 'string' then
+            param.value = arg[1]
+        elseif arg.type == 'number' then
+            param.value = arg[1]
+        elseif arg.type == 'boolean' then
+            param.value = arg[1]
+        elseif arg.type == 'getlocal' or arg.type == 'getglobal' then
+            param.value = arg[1]
+        else
+            param.value = arg.type
+        end
+        
+        table.insert(parameters, param)
+    end
+    
+    return parameters
+end
+
+-- 优化的类型组合生成（限制组合数量）
+local function generateTypeCallInfosOptimized(sourcePossibleTypes, targetPossibleTypes, callName)
+    local typeCallInfos = {}
+    local maxCombinations = 10  -- 限制最大组合数
+    local combinationCount = 0
+    
+    -- 如果类型太多，只取前几个
+    local sourceTypes = {}
+    local targetTypes = {}
+    
+    for i, sourceType in ipairs(sourcePossibleTypes) do
+        if i <= 3 then  -- 最多3个源类型
+            table.insert(sourceTypes, sourceType)
+        end
+    end
+    
+    for i, targetType in ipairs(targetPossibleTypes) do
+        if i <= 3 then  -- 最多3个目标类型
+            table.insert(targetTypes, targetType)
+        end
+    end
+    
+    -- 生成组合
+    if #sourceTypes > 0 and #targetTypes > 0 then
+        for _, sourceType in ipairs(sourceTypes) do
+            for _, targetType in ipairs(targetTypes) do
+                if combinationCount >= maxCombinations then
+                    break
+                end
+                
+                table.insert(typeCallInfos, {
+                    sourceType = sourceType,
+                    targetType = targetType,
+                    callPattern = sourceType .. " -> " .. targetType .. " (" .. callName .. ")"
+                })
+                combinationCount = combinationCount + 1
+            end
+            if combinationCount >= maxCombinations then
+                break
+            end
+        end
+    elseif #sourceTypes > 0 then
+        for _, sourceType in ipairs(sourceTypes) do
+            table.insert(typeCallInfos, {
+                sourceType = sourceType,
+                targetType = "unknown",
+                callPattern = sourceType .. " -> unknown (" .. callName .. ")"
+            })
+        end
+    elseif #targetTypes > 0 then
+        for _, targetType in ipairs(targetTypes) do
+            table.insert(typeCallInfos, {
+                sourceType = "unknown",
+                targetType = targetType,
+                callPattern = "unknown -> " .. targetType .. " (" .. callName .. ")"
+            })
+        end
+    end
+    
+    return typeCallInfos
+end
+
+-- 优化的recordCallInfo函数
+local function recordCallInfoOptimized(ctx, uri, moduleId, source, providedCallName)
+    local callName = getCallNameOptimized(source, providedCallName)
+    if not callName then
+        return
     end
     
     local position = utils.getNodePosition(source)
     
-    -- 查找调用者的符号ID
+    -- 快速查找当前作用域和方法
     local sourceSymbolId = nil
     local currentScope = context.findCurrentScope(ctx, source)
     local currentMethod = context.findCurrentMethod(ctx, source)
@@ -142,70 +291,20 @@ local function recordCallInfo(ctx, uri, moduleId, source, providedCallName)
         sourceSymbolId = currentScope.id
     end
     
-    -- 查找目标函数的符号ID
-    local targetSymbolId, targetSymbol = context.findFunctionSymbol(ctx, callName)
+    -- 使用缓存查找目标函数
+    local targetSymbolId, targetSymbol = findFunctionSymbolCached(ctx, callName)
     
-    -- 如果直接查找失败，尝试通过别名查找
+    -- 如果直接查找失败，尝试类别名查找（简化版本）
     if not targetSymbolId then
-        local className, methodName = callName:match('([^.]+)%.(.+)')
+        local className, methodName = callName:match('([^.:]+)[.:](.+)')
         if className and methodName then
-            -- 查找类别名（从第1阶段的符号表中查找）
-            local classId, classSymbol = context.findSymbol(ctx, function(symbol)
-                return symbol.type == SYMBOL_TYPE.CLASS and symbol.name == className
-            end)
-            
-            if classSymbol then
-                local realFuncName = classSymbol.name .. '.' .. methodName
-                targetSymbolId, targetSymbol = context.findFunctionSymbol(ctx, realFuncName)
-            end
+            local classCallName = className .. '.' .. methodName
+            targetSymbolId, targetSymbol = findFunctionSymbolCached(ctx, classCallName)
         end
     end
     
-    -- 如果直接查找失败，说明符号不存在，记录为未解析调用
-    -- 第一阶段已经建立了完整的符号表，如果找不到就是真的不存在
-    
-    -- 分析参数信息
-    local parameters = {}
-    if source.args then
-        for i, arg in ipairs(source.args) do
-            local param = {
-                index = i,
-                type = nil,
-                symbolId = nil,
-                value = nil
-            }
-            
-            -- 分析参数类型
-            if arg.type == 'getlocal' or arg.type == 'getglobal' then
-                param.type = 'variable_reference'
-                local varName = utils.getNodeName(arg)
-                if varName then
-                    param.symbolId, _ = context.findVariableSymbol(ctx, varName, currentScope)
-                    param.value = varName
-                end
-            elseif arg.type == 'string' then
-                param.type = 'string_literal'
-                param.value = arg[1]
-            elseif arg.type == 'number' then
-                param.type = 'number_literal'
-                param.value = arg[1]
-            elseif arg.type == 'boolean' then
-                param.type = 'boolean_literal'
-                param.value = arg[1]
-            elseif arg.type == 'table' then
-                param.type = 'table_literal'
-                param.value = 'table'
-            elseif arg.type == 'call' then
-                param.type = 'function_call'
-                param.value = utils.getCallName(arg)
-            else
-                param.type = 'other'
-                param.value = arg.type
-            end
-            
-            table.insert(parameters, param)
-        end
-    end
+    -- 简化的参数分析
+    local parameters = analyzeParametersOptimized(source, currentScope, ctx)
     
     -- 创建call信息记录
     local callInfo = {
@@ -222,144 +321,119 @@ local function recordCallInfo(ctx, uri, moduleId, source, providedCallName)
         timestamp = os.time()
     }
     
-    -- 检查并建立模块间引用关系
-    local sourceModule = nil
-    local targetModule = nil
-    
-    -- 获取源符号所属的模块
-    if sourceSymbolId then
+    -- 快速处理模块间引用关系
+    if sourceSymbolId and targetSymbolId then
         local sourceSymbol = ctx.symbols[sourceSymbolId]
-        if sourceSymbol and sourceSymbol.module then
-            sourceModule = sourceSymbol.module
-        end
-    end
-    
-    -- 获取目标符号所属的模块
-    if targetSymbolId then
         local targetSymbol = ctx.symbols[targetSymbolId]
-        if targetSymbol and targetSymbol.module then
-            targetModule = targetSymbol.module
+        
+        if sourceSymbol and targetSymbol and 
+           sourceSymbol.module and targetSymbol.module and 
+           sourceSymbol.module ~= targetSymbol.module then
+            context.addRelation(ctx, 'module_reference', sourceSymbol.module, targetSymbol.module)
         end
     end
     
-    -- 如果源模块和目标模块不同，建立模块间引用关系
-    if sourceModule and targetModule and sourceModule ~= targetModule then
-        context.addRelation(ctx, 'module_reference', sourceModule, targetModule)
-        context.debug(ctx, "🔗 模块间引用: %s -> %s (通过调用 %s)", sourceModule, targetModule, callName)
-    end
+    -- 优化的类型级别调用信息
+    local sourcePossibleTypes = getAllPossibleTypeNamesCached(ctx, sourceSymbolId)
+    local targetPossibleTypes = getAllPossibleTypeNamesCached(ctx, targetSymbolId)
     
-    -- 添加类型级别的调用信息（处理所有可能的类型组合）
-    local sourcePossibleTypes = getAllPossibleTypeNames(ctx, sourceSymbolId)
-    local targetPossibleTypes = getAllPossibleTypeNames(ctx, targetSymbolId)
-    
-    callInfo.typeCallInfos = {}
-    
-    -- 为每个可能的类型组合创建调用关系
-    if #sourcePossibleTypes > 0 and #targetPossibleTypes > 0 then
-        for _, sourceType in ipairs(sourcePossibleTypes) do
-            for _, targetType in ipairs(targetPossibleTypes) do
-                local typeCallInfo = {
-                    sourceType = sourceType,
-                    targetType = targetType,
-                    callPattern = sourceType .. " -> " .. targetType .. " (" .. callName .. ")"
-                }
-                table.insert(callInfo.typeCallInfos, typeCallInfo)
-                context.debug(ctx, "🎯 类型调用关系: %s", typeCallInfo.callPattern)
-            end
-        end
-    elseif #sourcePossibleTypes > 0 then
-        -- 只有源类型，目标未知
-        for _, sourceType in ipairs(sourcePossibleTypes) do
-            local typeCallInfo = {
-                sourceType = sourceType,
-                targetType = "unknown",
-                callPattern = sourceType .. " -> unknown (" .. callName .. ")"
-            }
-            table.insert(callInfo.typeCallInfos, typeCallInfo)
-            context.debug(ctx, "🎯 类型调用关系: %s", typeCallInfo.callPattern)
-        end
-    elseif #targetPossibleTypes > 0 then
-        -- 只有目标类型，源未知
-        for _, targetType in ipairs(targetPossibleTypes) do
-            local typeCallInfo = {
-                sourceType = "unknown",
-                targetType = targetType,
-                callPattern = "unknown -> " .. targetType .. " (" .. callName .. ")"
-            }
-            table.insert(callInfo.typeCallInfos, typeCallInfo)
-            context.debug(ctx, "🎯 类型调用关系: %s", typeCallInfo.callPattern)
-        end
-    end
+    callInfo.typeCallInfos = generateTypeCallInfosOptimized(sourcePossibleTypes, targetPossibleTypes, callName)
     
     -- 添加到context中
     context.addCallInfo(ctx, callInfo)
-    
-    context.info("📞 记录call信息: %s (源: %s, 目标: %s, 参数: %d)", 
-        callName, sourceSymbolId or "nil", targetSymbolId or "nil", #parameters)
 end
 
--- 第1轮操作：遍历所有AST，记录call信息
-local function recordAllCallInfos(ctx)
+-- 优化的recordAllCallInfos函数
+local function recordAllCallInfosOptimized(ctx)
+    -- 清理缓存
+    clearCaches()
+    
     -- 重置节点去重状态
-    context.info("【step2-1】   11")
     context.resetProcessedNodes(ctx, "Phase2-Round1")
-    context.info("【step2-1】   22")
+    
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
-    context.info("【step2-1】   33")
+    
     -- 初始化节点跟踪器
     if ctx.config.enableNodeTracking then
-        tracker1 = nodeTracker.new("phase2_round1")
+        tracker1 = nodeTracker.new("phase2_round1_optimized")
     end
     
-    context.info("【step2-1】   开始: %d", totalFiles)
+    context.info("🚀 开始优化版本的调用信息记录: %d个文件", totalFiles)
+    
+    -- 批量收集所有调用节点
+    local allCallNodes = {}
+    local allMethodNodes = {}
+    
     for i, uri in ipairs(uris) do
-        -- 从context中获取模块信息，而不是重新读取文件
         local module = ctx.uriToModule[uri]
-        -- 显示进度
-        if i % 10 == 0 or i == totalFiles then
-            context.info("【step2-1】    %s, 进度: %d/%d (%.1f%%)", uri, i, totalFiles, i/totalFiles*100)
-        end
         if module and module.ast then
             local moduleId = utils.getModulePath(uri, ctx.rootUri)
             
-            -- 遍历所有调用节点
-
+            -- 预过滤：只收集call和getmethod节点
             guide.eachSource(module.ast, function(source)
-                -- 每次处理新的源节点时，增加调用帧索引
-                ctx.currentFrameIndex = ctx.currentFrameIndex + 1
-                
-                -- 记录节点处理
-                if tracker1 then
-                    nodeTracker.recordNode(tracker1, source)
-                end
-                
-                -- 处理getmethod节点 - 这些可能是方法调用的一部分
-                if source.type == 'getmethod' then
-                    -- 检查这个getmethod是否是call的一部分
+                if source.type == 'call' then
+                    table.insert(allCallNodes, {
+                        source = source,
+                        uri = uri,
+                        moduleId = moduleId
+                    })
+                elseif source.type == 'getmethod' then
+                    -- 检查是否是方法调用的一部分
                     local parent = source.parent
                     if parent and parent.type == 'call' and parent.node == source then
-                        -- 这是一个方法调用！直接处理
-                        local objNode = source.node
-                        local methodNode = source.method
-                        local obj = utils.getNodeName(objNode)
-                        local method = utils.getNodeName(methodNode)
-                        
-
-                        
-                        if obj and method then
-                            local callName = obj .. ':' .. method
-                            recordCallInfo(ctx, uri, moduleId, parent, callName)
-                        end
+                        table.insert(allMethodNodes, {
+                            source = parent,
+                            methodSource = source,
+                            uri = uri,
+                            moduleId = moduleId
+                        })
                     end
-                end
-                
-                if source.type == 'call' then
-                    recordCallInfo(ctx, uri, moduleId, source)
                 end
             end)
         end
+        
+        -- 显示进度
+        if i % 20 == 0 or i == totalFiles then
+            context.info("📊 文件扫描进度: %d/%d (%.1f%%)", i, totalFiles, i/totalFiles*100)
+        end
     end
+    
+    context.info("📦 收集到 %d 个调用节点，%d 个方法调用节点", #allCallNodes, #allMethodNodes)
+    
+    -- 批量处理调用节点
+    local totalNodes = #allCallNodes + #allMethodNodes
+    local processedNodes = 0
+    
+    for _, nodeInfo in ipairs(allCallNodes) do
+        recordCallInfoOptimized(ctx, nodeInfo.uri, nodeInfo.moduleId, nodeInfo.source)
+        processedNodes = processedNodes + 1
+        
+        if processedNodes % 100 == 0 then
+            context.info("🔄 处理进度: %d/%d (%.1f%%)", processedNodes, totalNodes, processedNodes/totalNodes*100)
+        end
+    end
+    
+    -- 处理方法调用节点
+    for _, nodeInfo in ipairs(allMethodNodes) do
+        local objNode = nodeInfo.methodSource.node
+        local methodNode = nodeInfo.methodSource.method
+        local obj = utils.getNodeName(objNode)
+        local method = utils.getNodeName(methodNode)
+        
+        if obj and method then
+            local callName = obj .. ':' .. method
+            recordCallInfoOptimized(ctx, nodeInfo.uri, nodeInfo.moduleId, nodeInfo.source, callName)
+        end
+        
+        processedNodes = processedNodes + 1
+        
+        if processedNodes % 100 == 0 then
+            context.info("🔄 处理进度: %d/%d (%.1f%%)", processedNodes, totalNodes, processedNodes/totalNodes*100)
+        end
+    end
+    
+    context.info("✅ 优化版本调用信息记录完成，共处理 %d 个节点", processedNodes)
 end
 
 -- 添加类型到possibles哈希表，确保去重和别名处理
@@ -469,11 +543,21 @@ local function findAssignmentTargets(ctx, callInfo)
                 if source.type == 'local' and source.value then
                     -- 检查是否是我们要找的调用
                     for i, value in ipairs(source.value) do
-                        if value.type == 'call' then
+                        if value and value.type == 'call' then
                             local valueCallName = utils.getCallName(value)
                             if valueCallName == callInfo.callName then
                                 -- 找到了匹配的赋值语句
-                                local varName = source[i]
+                                local varName = nil
+                                
+                                -- 安全地获取变量名
+                                if source[i] then
+                                    if type(source[i]) == 'table' and source[i][1] then
+                                        varName = source[i][1]  -- 获取变量名
+                                    elseif type(source[i]) == 'string' then
+                                        varName = source[i]
+                                    end
+                                end
+                                
                                 if varName then
                                     -- 查找对应的变量符号
                                     local currentScope = context.findCurrentScope(ctx, source)
@@ -896,7 +980,7 @@ function phase2.analyze(ctx)
 
     print("第一轮操作，recordAllCallInfos")
     -- 第1轮操作：遍历AST记录call信息
-    recordAllCallInfos(ctx)
+    recordAllCallInfosOptimized(ctx)
     
     -- 保存第一轮完成后的缓存
     if cacheManager and cacheManager.config.enabled then

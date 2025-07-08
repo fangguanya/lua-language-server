@@ -155,9 +155,15 @@ function cache_manager.checkFileChanges(manager, cachedFingerprints, currentFing
     return changes
 end
 
--- 安全序列化函数 - 过滤不能序列化的数据类型
-local function safeSerialize(data, visited)
+-- 安全序列化函数 - 过滤不能序列化的数据类型，避免栈溢出
+local function safeSerialize(data, visited, depth)
     visited = visited or {}
+    depth = depth or 0
+    
+    -- 限制最大深度，避免栈溢出
+    if depth > 8 then
+        return nil
+    end
     
     if data == nil then
         return nil
@@ -184,38 +190,51 @@ local function safeSerialize(data, visited)
     -- 处理表类型
     if dataType == "table" then
         local result = {}
-        local hasNumericKeys = false
-        local hasStringKeys = false
+        local count = 0
+        local maxItems = 500000000  -- 限制表的最大项目数
         
-        -- 检查键的类型
+        -- 优先处理字符串键
+        local stringKeys = {}
+        local numberKeys = {}
+        
         for k, v in pairs(data) do
-            if type(k) == "number" then
-                hasNumericKeys = true
-            elseif type(k) == "string" then
-                hasStringKeys = true
+            if type(k) == "string" then
+                table.insert(stringKeys, k)
+            elseif type(k) == "number" then
+                table.insert(numberKeys, k)
             end
         end
         
-        -- 如果是混合键类型，只保留字符串键
-        if hasNumericKeys and hasStringKeys then
-            for k, v in pairs(data) do
-                if type(k) == "string" then
-                    local safeValue = safeSerialize(v, visited)
-                    if safeValue ~= nil then
-                        result[k] = safeValue
-                    end
-                end
+        -- 处理字符串键
+        for _, k in ipairs(stringKeys) do
+            count = count + 1
+            if count > maxItems then
+                break
             end
-        else
-            -- 正常处理
-            for k, v in pairs(data) do
-                local safeKey = safeSerialize(k, visited)
-                local safeValue = safeSerialize(v, visited)
-                if safeKey ~= nil and safeValue ~= nil then
-                    result[safeKey] = safeValue
+            
+            local v = data[k]
+            local safeValue = safeSerialize(v, visited, depth + 1)
+            if safeValue ~= nil then
+                result[k] = safeValue
+            end
+        end
+        
+        -- 如果还有空间，处理数字键
+        if count < maxItems then
+            for _, k in ipairs(numberKeys) do
+                count = count + 1
+                if count > maxItems then
+                    break
+                end
+                
+                local v = data[k]
+                local safeValue = safeSerialize(v, visited, depth + 1)
+                if safeValue ~= nil then
+                    result[k] = safeValue
                 end
             end
         end
+        
         return result
     end
     
