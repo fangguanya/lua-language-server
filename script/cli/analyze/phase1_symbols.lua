@@ -1511,6 +1511,9 @@ function phase1.analyze(ctx)
         trackerSymbols = nodeTracker.new("phase1_symbols")
     end
     
+    -- 获取缓存管理器（如果有的话）
+    local cacheManager = ctx.cacheManager
+    
     -- 第一次调用时获取并缓存文件列表
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
@@ -1529,6 +1532,20 @@ function phase1.analyze(ctx)
     end
     
     context.info("第一遍完成，已缓存 %d 个模块对象", utils.tableSize(ctx.uriToModule))
+    
+    -- 保存第一遍完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase1_round1_complete",
+            description = "第一遍：符号定义完成",
+            filesProcessed = totalFiles,
+            symbolsFound = utils.tableSize(ctx.symbols),
+            modulesFound = utils.tableSize(ctx.modules),
+            classesFound = utils.tableSize(ctx.classes)
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase1_symbols", progress)
+    end
     
     -- 第二遍：建立引用关系（使用缓存的模块对象）
     context.resetProcessedNodes(ctx, "Phase1-Round2")
@@ -1578,15 +1595,51 @@ function phase1.analyze(ctx)
         end
     end
     
+    -- 保存第二遍完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase1_round2_complete",
+            description = "第二遍：引用关系完成",
+            totalReferences = totalRefs,
+            totalRelated = totalRelated
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase1_symbols", progress)
+    end
+    
     -- 第三遍：验证并去重父类关系
     context.resetProcessedNodes(ctx, "Phase1-Round3")
     context.info("  🔄 第三遍：验证并去重父类关系...")
-    resolveParentClassRelations(ctx)
+    local parentClassCount = resolveParentClassRelations(ctx)
+    
+    -- 保存第三遍完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase1_round3_complete",
+            description = "第三遍：父类关系验证完成",
+            parentClassRelations = parentClassCount
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase1_symbols", progress)
+    end
     
     -- 第四遍：整理类型别名，移动定义到真正的类型上
     context.resetProcessedNodes(ctx, "Phase1-Round4")
     context.info("  🔄 第四遍：整理类型别名...")
-    consolidateTypeAliases(ctx)
+    local processedCount, movedMethods, movedVariables = consolidateTypeAliases(ctx)
+    
+    -- 保存第四遍完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase1_round4_complete",
+            description = "第四遍：类型别名整理完成",
+            processedAliases = processedCount,
+            movedMethods = movedMethods,
+            movedVariables = movedVariables
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase1_symbols", progress)
+    end
     
     -- 统计信息
     local moduleCount = utils.tableSize(ctx.modules)
@@ -1605,6 +1658,9 @@ function phase1.analyze(ctx)
     if ctx.config.enableNodeTracking and trackerSymbols then
         nodeTracker.printStatistics(trackerSymbols)
     end
+    
+    -- 更新上下文统计信息
+    ctx.statistics.totalSymbols = symbolCount
 end
 
 return phase1 

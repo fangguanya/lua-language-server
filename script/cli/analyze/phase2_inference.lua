@@ -294,28 +294,32 @@ local function recordCallInfo(ctx, uri, moduleId, source, providedCallName)
     -- 添加到context中
     context.addCallInfo(ctx, callInfo)
     
-    context.debug(ctx, "📞 记录call信息: %s (源: %s, 目标: %s, 参数: %d)", 
+    context.info("📞 记录call信息: %s (源: %s, 目标: %s, 参数: %d)", 
         callName, sourceSymbolId or "nil", targetSymbolId or "nil", #parameters)
 end
 
 -- 第1轮操作：遍历所有AST，记录call信息
 local function recordAllCallInfos(ctx)
     -- 重置节点去重状态
+    context.info("【step2-1】   11")
     context.resetProcessedNodes(ctx, "Phase2-Round1")
-    
+    context.info("【step2-1】   22")
     local uris = context.getFiles(ctx)
     local totalFiles = #uris
-    
-
-    
+    context.info("【step2-1】   33")
     -- 初始化节点跟踪器
     if ctx.config.enableNodeTracking then
         tracker1 = nodeTracker.new("phase2_round1")
     end
     
+    context.info("【step2-1】   开始: %d", totalFiles)
     for i, uri in ipairs(uris) do
         -- 从context中获取模块信息，而不是重新读取文件
         local module = ctx.uriToModule[uri]
+        -- 显示进度
+        if i % 10 == 0 or i == totalFiles then
+            context.info("【step2-1】    %s, 进度: %d/%d (%.1f%%)", uri, i, totalFiles, i/totalFiles*100)
+        end
         if module and module.ast then
             local moduleId = utils.getModulePath(uri, ctx.rootUri)
             
@@ -355,11 +359,7 @@ local function recordAllCallInfos(ctx)
                 end
             end)
         end
-        
-
     end
-    
-
 end
 
 -- 添加类型到possibles哈希表，确保去重和别名处理
@@ -558,8 +558,14 @@ local function inferTypesFromCalls(ctx)
     end
     
     -- 遍历所有调用信息
-    for _, callInfo in ipairs(ctx.calls.callInfos) do
+    local length = #ctx.calls.callInfos
+    for i, callInfo in ipairs(ctx.calls.callInfos) do
         local callName = callInfo.callName
+        
+        -- 显示进度
+        if i % 10 == 0 or i == length then
+            context.info("【step2-2-1】    %s, 进度: %d/%d (%.1f%%)", callName, i, length, i/length*100)
+        end
         
         -- 检查是否为构造函数调用
         if callName and (callName:find(':new') or callName:find('%.new')) then
@@ -707,7 +713,12 @@ local function buildTypeCallSummary(ctx)
     local callCount = 0
     
     -- 遍历所有调用信息，提取类型级别的调用关系
-    for _, callInfo in ipairs(ctx.calls.callInfos) do
+    local length = #ctx.calls.callInfos
+    for i, callInfo in ipairs(ctx.calls.callInfos) do
+        -- 显示进度
+        if i % 10 == 0 or i == length then
+            context.info("【step2-2-3】    进度: %d/%d (%.1f%%)", i, length, i/length*100)
+        end
         if callInfo.typeCallInfo then
             local sourceType = callInfo.typeCallInfo.sourceType
             local targetType = callInfo.typeCallInfo.targetType
@@ -767,7 +778,12 @@ local function analyzeMemberAccess(ctx)
     local fileUris = context.getFiles(ctx)
     
     -- 遍历所有文件的AST
-    for _, uri in ipairs(fileUris) do
+    local length = #fileUris
+    for i, uri in ipairs(fileUris) do
+        -- 显示进度
+        if i % 10 == 0 or i == length then
+            context.info("【step2-2-4】    %s, 进度: %d/%d (%.1f%%)", uri, i, length, i/length*100)
+        end
         local state = files.getState(uri)
         if state and state.ast then
             -- 查找getfield和getindex节点
@@ -855,15 +871,19 @@ local function performDataFlowAnalysis(ctx)
     --propagateTypesThroughReferences(ctx)
     
     -- 2. 基于call信息进行类型推断
+    print("第二轮操作1，inferTypesFromCalls")
     inferTypesFromCalls(ctx)
     
     -- 3. 建立不同类型的关系
+    print("第二轮操作2，buildReferenceRelations")
     local referenceRelationCount = buildReferenceRelations(ctx)
     
     -- 4. 建立类型间调用关系汇总
+    print("第二轮操作3，buildTypeCallSummary")
     local typeCallSummaryCount = buildTypeCallSummary(ctx)
     
     -- 5. 分析成员访问
+    print("第二轮操作4，analyzeMemberAccess")
     local memberAccessCount = analyzeMemberAccess(ctx)
     
 
@@ -871,13 +891,38 @@ end
 
 -- 第二阶段：类型推断和数据流分析
 function phase2.analyze(ctx)
+    -- 获取缓存管理器（如果有的话）
+    local cacheManager = ctx.cacheManager
 
-    
+    print("第一轮操作，recordAllCallInfos")
     -- 第1轮操作：遍历AST记录call信息
     recordAllCallInfos(ctx)
     
+    -- 保存第一轮完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase2_round1_complete",
+            description = "第一轮：调用信息记录完成",
+            callInfosRecorded = #ctx.calls.callInfos
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase2_inference", progress)
+    end
+    
+    print("第二轮操作，performDataFlowAnalysis")
     -- 第2轮操作：数据流分析
     performDataFlowAnalysis(ctx)
+    
+    -- 保存第二轮完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase2_round2_complete",
+            description = "第二轮：数据流分析完成",
+            totalRelations = #ctx.relations
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase2_inference", progress)
+    end
     
     -- 打印节点跟踪统计
     if ctx.config.enableNodeTracking then
@@ -885,8 +930,6 @@ function phase2.analyze(ctx)
             nodeTracker.printStatistics(tracker2)
         end
     end
-    
-
 end
 
 return phase2 

@@ -472,6 +472,9 @@ end
 function phase4.analyze(ctx)
     print("🔍 第四阶段：函数调用关系分析")
     
+    -- 获取缓存管理器（如果有的话）
+    local cacheManager = ctx.cacheManager
+    
     -- 重置节点去重状态
     context.resetProcessedNodes(ctx, "Phase4")
     
@@ -495,9 +498,38 @@ function phase4.analyze(ctx)
     -- 处理各类关系
     local functionCallCount = processFunctionCalls(ctx)
     local referenceCount = processTypeReferences(ctx)
+    
+    -- 保存调用分析第一轮完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase4_calls_complete",
+            description = "函数调用分析完成",
+            functionCallCount = functionCallCount,
+            referenceCount = referenceCount
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase4_calls", progress)
+    end
+    
     local dependencyCount = processModuleDependencies(ctx)
     local assignmentCount = processVariableAssignments(ctx)
     local memberAccessCount = processMemberAccess(ctx)
+    
+    -- 保存所有关系分析完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase4_all_complete",
+            description = "所有关系分析完成",
+            functionCallCount = functionCallCount,
+            referenceCount = referenceCount,
+            dependencyCount = dependencyCount,
+            assignmentCount = assignmentCount,
+            memberAccessCount = memberAccessCount,
+            totalRelations = #ctx.relations
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase4_calls", progress)
+    end
     
     -- 统计信息
     local totalRelations = #ctx.relations

@@ -328,6 +328,9 @@ end
 function phase3.analyze(ctx)
     print("🔍 第三阶段：实体关系导出")
     
+    -- 获取缓存管理器（如果有的话）
+    local cacheManager = ctx.cacheManager
+    
     -- 重置节点去重状态
     context.resetProcessedNodes(ctx, "Phase3")
     
@@ -344,6 +347,21 @@ function phase3.analyze(ctx)
     local functionCount = exportFunctionEntities(ctx)
     local variableCount = exportVariableEntities(ctx)
     
+    -- 保存实体导出完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase3_entities_complete",
+            description = "实体导出完成",
+            totalEntities = #ctx.entities,
+            moduleCount = moduleCount,
+            classCount = classCount,
+            functionCount = functionCount,
+            variableCount = variableCount
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase3_export", progress)
+    end
+    
     print("  导出关系...")
     
     -- 导出各类关系
@@ -351,6 +369,21 @@ function phase3.analyze(ctx)
     local referenceCount = exportReferenceRelations(ctx)
     local aliasCount = exportAliasRelations(ctx)
     local inheritanceCount = exportInheritanceRelations(ctx)
+    
+    -- 保存关系导出完成后的缓存
+    if cacheManager and cacheManager.config.enabled then
+        local progress = {
+            step = "phase3_relations_complete",
+            description = "关系导出完成",
+            totalRelations = #ctx.relations,
+            containmentCount = containmentCount,
+            referenceCount = referenceCount,
+            aliasCount = aliasCount,
+            inheritanceCount = inheritanceCount
+        }
+        local cache_manager = require 'cli.analyze.cache_manager'
+        cache_manager.saveCache(cacheManager, ctx, "phase3_export", progress)
+    end
     
     -- 统计信息
     local totalEntities = #ctx.entities
