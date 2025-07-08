@@ -191,43 +191,48 @@ local function safeSerialize(data, visited, depth)
     if dataType == "table" then
         local result = {}
         local count = 0
-        local maxItems = 500000000  -- 限制表的最大项目数
+        local maxItems = 5000000  -- 限制表的最大项目数，避免过大的表
         
-        -- 优先处理字符串键
-        local stringKeys = {}
-        local numberKeys = {}
+        -- 检查是否是混合键类型的表
+        local hasStringKeys = false
+        local hasNumberKeys = false
         
         for k, v in pairs(data) do
             if type(k) == "string" then
-                table.insert(stringKeys, k)
+                hasStringKeys = true
             elseif type(k) == "number" then
-                table.insert(numberKeys, k)
-            end
-        end
-        
-        -- 处理字符串键
-        for _, k in ipairs(stringKeys) do
-            count = count + 1
-            if count > maxItems then
-                break
+                hasNumberKeys = true
             end
             
-            local v = data[k]
-            local safeValue = safeSerialize(v, visited, depth + 1)
-            if safeValue ~= nil then
-                result[k] = safeValue
+            -- 如果发现混合键类型，只保留字符串键
+            if hasStringKeys and hasNumberKeys then
+                break
             end
         end
         
-        -- 如果还有空间，处理数字键
-        if count < maxItems then
-            for _, k in ipairs(numberKeys) do
+        -- 如果是混合键类型的表，只处理字符串键
+        if hasStringKeys and hasNumberKeys then
+            for k, v in pairs(data) do
+                if type(k) == "string" then
+                    count = count + 1
+                    if count > maxItems then
+                        break
+                    end
+                    
+                    local safeValue = safeSerialize(v, visited, depth + 1)
+                    if safeValue ~= nil then
+                        result[k] = safeValue
+                    end
+                end
+            end
+        else
+            -- 处理单一键类型的表
+            for k, v in pairs(data) do
                 count = count + 1
                 if count > maxItems then
                     break
                 end
                 
-                local v = data[k]
                 local safeValue = safeSerialize(v, visited, depth + 1)
                 if safeValue ~= nil then
                     result[k] = safeValue

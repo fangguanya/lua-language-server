@@ -410,7 +410,7 @@ local function recordAllCallInfosOptimized(ctx)
         processedNodes = processedNodes + 1
         
         if processedNodes % 100 == 0 then
-            context.info("🔄 处理进度: %d/%d (%.1f%%)", processedNodes, totalNodes, processedNodes/totalNodes*100)
+            context.info("🔄 处理进度A: %d/%d (%.1f%%)", processedNodes, totalNodes, processedNodes/totalNodes*100)
         end
     end
     
@@ -429,7 +429,7 @@ local function recordAllCallInfosOptimized(ctx)
         processedNodes = processedNodes + 1
         
         if processedNodes % 100 == 0 then
-            context.info("🔄 处理进度: %d/%d (%.1f%%)", processedNodes, totalNodes, processedNodes/totalNodes*100)
+            context.info("🔄 处理进度B: %d/%d (%.1f%%)", processedNodes, totalNodes, processedNodes/totalNodes*100)
         end
     end
     
@@ -540,22 +540,25 @@ local function findAssignmentTargets(ctx, callInfo)
             -- 遍历AST查找赋值语句
             guide.eachSource(module.ast, function(source)
                 -- 处理local变量赋值：local obj = player:new()
-                if source.type == 'local' and source.value then
+                if source.type == 'local' and source.value and type(source.value) == 'table' then
                     -- 检查是否是我们要找的调用
                     for i, value in ipairs(source.value) do
-                        if value and value.type == 'call' then
+                        -- 确保value是表类型且有type字段
+                        if type(value) == 'table' and value.type == 'call' then
                             local valueCallName = utils.getCallName(value)
                             if valueCallName == callInfo.callName then
                                 -- 找到了匹配的赋值语句
                                 local varName = nil
                                 
-                                -- 安全地获取变量名
-                                if source[i] then
-                                    if type(source[i]) == 'table' and source[i][1] then
+                                -- 安全地获取变量名 - 检查source是否有对应的变量名数组
+                                if source[i] and type(source[i]) == 'table' then
+                                    if source[i][1] and type(source[i][1]) == 'string' then
                                         varName = source[i][1]  -- 获取变量名
-                                    elseif type(source[i]) == 'string' then
-                                        varName = source[i]
+                                    elseif source[i].name and type(source[i].name) == 'string' then
+                                        varName = source[i].name
                                     end
+                                elseif source[i] and type(source[i]) == 'string' then
+                                    varName = source[i]
                                 end
                                 
                                 if varName then
